@@ -16,14 +16,14 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    nivel_idioma: str
     usuario_id: int
+    nombre: str
 
 
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=6)
-    nivel_idioma: str = Field(default="principiante")
+    nombre: str = Field(min_length=1, max_length=100)
 
 
 # ---------------------------------------------------------------------------

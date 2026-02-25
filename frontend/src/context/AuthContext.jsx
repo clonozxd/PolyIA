@@ -36,18 +36,18 @@ export function AuthProvider({ children }) {
     _persist(data.access_token, {
       id: data.usuario_id,
       email,
-      nivel_idioma: data.nivel_idioma,
+      nombre: data.nombre,
     })
     return data
   }, [_persist])
 
   /** Register – calls POST /api/auth/register */
-  const register = useCallback(async (email, password, nivel_idioma = 'principiante') => {
-    const { data } = await api.post('/api/auth/register', { email, password, nivel_idioma })
+  const register = useCallback(async (email, password, nombre) => {
+    const { data } = await api.post('/api/auth/register', { email, password, nombre })
     _persist(data.access_token, {
       id: data.usuario_id,
       email,
-      nivel_idioma: data.nivel_idioma,
+      nombre: data.nombre,
     })
     return data
   }, [_persist])
