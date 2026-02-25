@@ -320,3 +320,15 @@ CREATE INDEX IF NOT EXISTS ix_mensajes_usuario ON mensajes (usuario_id);
 - **Actividades/Cursos**: Añade nuevas tablas (`Curso`, `Actividad`) y endpoints siguiendo el mismo patrón de `Leccion`.
 - **WebSockets**: El endpoint de chat puede migrar a WebSocket para latencia aún menor.
 - **Redis**: Cachea las lecciones generadas para evitar llamadas repetidas a la API de la nube.
+
+---
+
+## Nota — Error en Windows (uvicorn / psycopg2)
+
+El backend responde correctamente. El problema tenía dos causas:
+
+- **UnicodeDecodeError en psycopg2:** La librería C de `psycopg2` (libpq) construía internamente un DSN con strings del sistema Windows codificados en CP-850 (tu locale español), causando un fallo al decodificar como UTF-8. Lo solucioné reemplazando `psycopg2` por `psycopg` v3, que maneja la codificación correctamente.
+
+- **Puerto 5432 en conflicto:** Tienes un PostgreSQL local instalado en el puerto `5432` que interceptaba la conexión antes que el contenedor Docker. Cambié el contenedor a usar el puerto `5433` externamente.
+
+Ahora el frontend en `http://localhost:5173` puede comunicarse con el backend en `http://localhost:8000` sin errores de proxy.
