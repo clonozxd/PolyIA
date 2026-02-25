@@ -53,7 +53,6 @@ PolyIA/
     ├── requirements.txt
     └── .env.example
 ```
-
 ---
 
 ## 🚀 Instalación y Ejecución Local
@@ -92,6 +91,44 @@ docker compose ps
 > La base de datos queda disponible en `localhost:5432` con las credenciales por defecto `polyia / polyia_secret`.
 
 ---
+
+### Windows — Iniciar (tras la instalación)
+
+Si ya instalaste dependencias, creaste el `.env` y configuraste todo, estos son los comandos mínimos para arrancar la app en Windows (PowerShell). Ejecuta cada comando en terminales separadas cuando corresponda.
+
+- Levantar la base de datos (si está apagada):
+
+```powershell
+cd C:\ruta\a\tu\repo\PolyIA   # o navega a la carpeta del proyecto
+docker compose up -d
+```
+
+- Iniciar el backend (terminal separada):
+
+```powershell
+cd C:\ruta\a\tu\repo\PolyIA\backend
+& ".venv\Scripts\Activate.ps1"    # activar venv
+$env:PYTHONUTF8 = "1"
+$env:PGCLIENTENCODING = "UTF8"
+python -m uvicorn main:app --reload --port 8000
+```
+
+- Iniciar el frontend (otra terminal):
+
+```powershell
+cd C:\ruta\a\tu\repo\PolyIA\frontend
+npm run dev
+```
+
+Accede a la aplicación en `http://localhost:5173` y a la API en `http://localhost:8000`.
+
+Si necesitas detener todo rápidamente:
+
+```powershell
+docker compose down
+# Ctrl+C en las terminales donde corren uvicorn y vite
+```
+
 
 ### Paso 3 — Configurar y ejecutar el Backend
 
