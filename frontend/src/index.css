@@ -1,0 +1,42 @@
+/* Global styles – Tailwind base layers + custom utilities */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Inter', ui-sans-serif, system-ui;
+  }
+
+  /* Smooth scrolling for the chat area */
+  .chat-scroll {
+    scroll-behavior: smooth;
+  }
+}
+
+@layer components {
+  /* Reusable card wrapper */
+  .card {
+    @apply bg-white rounded-2xl shadow-md p-6;
+  }
+
+  /* Primary action button */
+  .btn-primary {
+    @apply bg-primary-600 hover:bg-primary-700 text-white font-semibold
+           py-2 px-5 rounded-xl transition-colors duration-200 disabled:opacity-50
+           disabled:cursor-not-allowed;
+  }
+
+  /* Secondary / ghost button */
+  .btn-secondary {
+    @apply border border-primary-600 text-primary-600 hover:bg-primary-50
+           font-semibold py-2 px-5 rounded-xl transition-colors duration-200;
+  }
+
+  /* Form input */
+  .input {
+    @apply w-full border border-gray-300 rounded-xl px-4 py-2 text-sm
+           focus:outline-none focus:ring-2 focus:ring-primary-500
+           placeholder-gray-400 transition;
+  }
+}
