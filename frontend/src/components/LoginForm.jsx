@@ -10,12 +10,6 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
-const LEVELS = [
-  { value: 'principiante', label: 'Principiante (A1–A2)' },
-  { value: 'intermedio',   label: 'Intermedio (B1–B2)' },
-  { value: 'avanzado',     label: 'Avanzado (C1–C2)' },
-]
-
 export default function LoginForm() {
   const { login, register } = useAuth()
   const navigate = useNavigate()
@@ -23,7 +17,7 @@ export default function LoginForm() {
   const [mode, setMode] = useState('login')          // 'login' | 'register'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [nivel, setNivel] = useState('principiante')
+  const [nombre, setNombre] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -35,7 +29,7 @@ export default function LoginForm() {
     setLoading(true)
     try {
       if (isRegister) {
-        await register(email, password, nivel)
+        await register(email, password, nombre)
       } else {
         await login(email, password)
       }
@@ -111,22 +105,22 @@ export default function LoginForm() {
             />
           </div>
 
-          {/* Level selector – only shown during registration */}
+          {/* Username – only shown during registration */}
           {isRegister && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="nivel">
-                Nivel de idioma
+              <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="nombre">
+                Nombre de usuario
               </label>
-              <select
-                id="nivel"
+              <input
+                id="nombre"
+                type="text"
                 className="input"
-                value={nivel}
-                onChange={(e) => setNivel(e.target.value)}
-              >
-                {LEVELS.map((l) => (
-                  <option key={l.value} value={l.value}>{l.label}</option>
-                ))}
-              </select>
+                placeholder="Tu nombre de usuario"
+                value={nombre}
+                onChange={(e) => setNombre(e.target.value)}
+                required
+                autoComplete="username"
+              />
             </div>
           )}
 

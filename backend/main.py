@@ -131,7 +131,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenRe
     user = Usuario(
         email=payload.email,
         hashed_password=_hash_password(payload.password),
-        nivel_idioma=payload.nivel_idioma,
+        nombre=payload.nombre,
     )
     db.add(user)
     db.commit()
@@ -139,8 +139,8 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenRe
     token = _create_access_token({"sub": str(user.id)})
     return TokenResponse(
         access_token=token,
-        nivel_idioma=user.nivel_idioma,
         usuario_id=user.id,
+        nombre=user.nombre,
     )
 
 
@@ -156,8 +156,8 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     token = _create_access_token({"sub": str(user.id)})
     return TokenResponse(
         access_token=token,
-        nivel_idioma=user.nivel_idioma,
         usuario_id=user.id,
+        nombre=user.nombre,
     )
 
 
@@ -167,6 +167,7 @@ def me(current_user: Usuario = Depends(_get_current_user)):
     return {
         "id": current_user.id,
         "email": current_user.email,
+        "nombre": current_user.nombre,
         "nivel_idioma": current_user.nivel_idioma,
     }
 
