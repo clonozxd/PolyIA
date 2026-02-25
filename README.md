@@ -53,7 +53,6 @@ PolyIA/
     ├── requirements.txt
     └── .env.example
 ```
-a
 ---
 
 ## 🚀 Instalación y Ejecución Local
