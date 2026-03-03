@@ -151,6 +151,10 @@ LOCAL_MODEL_NAME=qwen2.5:3b
 
 #### Iniciar el backend
 
+    docker compose up -d (PostgreSQL)
+    uvicorn main:app --reload --port 8001
+    npm run dev
+
 ```bash
 uvicorn main:app --reload --port 8001
 ```
