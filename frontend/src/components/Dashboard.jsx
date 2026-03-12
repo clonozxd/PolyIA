@@ -1,13 +1,12 @@
 /**
  * Dashboard.jsx
  *
- * Main screen shown after login. Features:
- * - Welcome header with user name and logout
- * - Dark mode toggle next to the menu
- * - Progress summary (lessons generated, chat messages)
- * - "Generate New Lesson" panel (Google Gemini only)
- * - List of recent lessons
- * - Quick link to the Chat Tutor
+ * Main screen after login. Features:
+ * - Language selection (Español, Inglés, Japonés, Alemán)
+ * - Level progression system (CEFR / JLPT) with unlock requirements
+ * - Topic categories for lesson generation
+ * - Progress tracking per language
+ * - Navigation to active lesson or chat tutor
  */
 import PropTypes from 'prop-types'
 import { useCallback, useEffect, useState } from 'react'
@@ -16,31 +15,72 @@ import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import api from '../services/api'
 
-const LANGUAGES = ['inglés', 'francés', 'alemán', 'italiano', 'portugués', 'japonés', 'chino', 'árabe']
+/* ── Language / Level / Topic constants ────────────────────────────── */
 
-const LEVELS = [
-  { value: 'principiante', label: 'Principiante' },
-  { value: 'intermedio',   label: 'Intermedio' },
-  { value: 'avanzado',     label: 'Avanzado' },
+const LANGUAGES = [
+  { value: 'espanol', label: 'Español', flag: '🇪🇸' },
+  { value: 'ingles',  label: 'Inglés',  flag: '🇬🇧' },
+  { value: 'japones', label: 'Japonés', flag: '🇯🇵' },
+  { value: 'aleman',  label: 'Alemán',  flag: '🇩🇪' },
 ]
+
+const LEVELS_CEFR = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2']
+const LEVELS_JLPT = ['N5', 'N4', 'N3', 'N2', 'N1']
+
+const TOPICS = [
+  { value: 'vocabulario_tematico',  label: 'Vocabulario Temático',  emoji: '📖', desc: 'Palabras y situaciones cotidianas' },
+  { value: 'gramatica_practica',    label: 'Gramática Práctica',    emoji: '✏️', desc: 'Estructuras y tiempos verbales' },
+  { value: 'comprension_auditiva',  label: 'Comprensión Auditiva',  emoji: '🎧', desc: 'Escuchar y entender diálogos' },
+  { value: 'expresion_oral',        label: 'Expresión Oral',        emoji: '🗣️', desc: 'Pronunciación y conversación' },
+  { value: 'lectura_escritura',     label: 'Lectura y Escritura',   emoji: '📝', desc: 'Textos, traducción y redacción' },
+  { value: 'cultura_modismos',      label: 'Cultura y Modismos',    emoji: '🌍', desc: 'Frases hechas y expresiones' },
+]
+
+const LESSONS_TO_UNLOCK = 10
+
+function getLevels(idioma) {
+  return idioma === 'japones' ? LEVELS_JLPT : LEVELS_CEFR
+}
+
+/* ── Dashboard Component ──────────────────────────────────────────── */
 
 export default function Dashboard() {
   const { user, logout } = useAuth()
   const { dark, toggle } = useTheme()
   const navigate = useNavigate()
 
-  // Lesson generation form
-  const [tema, setTema] = useState('')
-  const [idioma, setIdioma] = useState('inglés')
-  const [nivel, setNivel] = useState('principiante')
+  // Selected language & topic
+  const [idioma, setIdioma] = useState('ingles')
+  const [nivel, setNivel] = useState('A1')
+  const [topic, setTopic] = useState('vocabulario_tematico')
+
+  // Progress data
+  const [progreso, setProgreso] = useState(null)
+  const [loadingProgress, setLoadingProgress] = useState(true)
+
+  // Lesson generation
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState('')
-  const [genSuccess, setGenSuccess] = useState('')
 
   // Lessons list
   const [lessons, setLessons] = useState([])
   const [loadingLessons, setLoadingLessons] = useState(true)
-  const [selectedLesson, setSelectedLesson] = useState(null)
+
+  const displayName = user?.nombre || user?.email?.split('@')[0] || 'Usuario'
+
+  /** Fetch progress for the selected language */
+  const fetchProgress = useCallback(async (lang) => {
+    setLoadingProgress(true)
+    try {
+      const { data } = await api.get(`/api/progreso/${lang}`)
+      setProgreso(data)
+      setNivel(data.nivel_actual)
+    } catch {
+      setProgreso(null)
+    } finally {
+      setLoadingProgress(false)
+    }
+  }, [])
 
   /** Fetch existing lessons */
   const fetchLessons = useCallback(async () => {
@@ -48,45 +88,50 @@ export default function Dashboard() {
       const { data } = await api.get('/api/leccion/lista')
       setLessons(data)
     } catch {
-      // Silently ignore – user may not have any lessons yet
+      // ignore
     } finally {
       setLoadingLessons(false)
     }
   }, [])
 
+  useEffect(() => { fetchProgress(idioma) }, [idioma, fetchProgress])
   useEffect(() => { fetchLessons() }, [fetchLessons])
 
-  /** Generate a new lesson via Google Gemini */
-  async function handleGenerate(e) {
-    e.preventDefault()
-    if (!tema.trim()) return
+  // When language changes, reset level to the current unlocked
+  useEffect(() => {
+    if (progreso) setNivel(progreso.nivel_actual)
+  }, [progreso])
+
+  /** Generate a new lesson */
+  async function handleGenerate() {
     setGenerating(true)
     setGenError('')
-    setGenSuccess('')
     try {
       const { data } = await api.post('/api/leccion/generar', {
-        tema: tema.trim(),
-        proveedor: 'google',
-        idioma_objetivo: idioma,
-        nivel_idioma: nivel,
+        idioma,
+        tema_categoria: topic,
+        nivel,
       })
-      setLessons((prev) => [data, ...prev])
-      setSelectedLesson(data)
-      setGenSuccess(`✅ Lección "${data.tema}" generada con éxito.`)
-      setTema('')
+      // Navigate to the exercise view
+      navigate(`/leccion/${data.id}`, { state: { lesson: data } })
     } catch (err) {
-      const msg = err?.response?.data?.detail || 'No se pudo generar la lección. Verifica la API key de Google.'
+      const msg = err?.response?.data?.detail || 'No se pudo generar la lección.'
       setGenError(typeof msg === 'string' ? msg : JSON.stringify(msg))
     } finally {
       setGenerating(false)
     }
   }
 
-  const displayName = user?.nombre || user?.email?.split('@')[0] || 'Usuario'
+  const levels = getLevels(idioma)
+  const unlocked = progreso?.niveles_desbloqueados || [levels[0]]
+  const completedTopics = new Set(progreso?.temas_completados || [])
+
+  // Filter lessons for the selected language
+  const filteredLessons = lessons.filter((l) => l.idioma === idioma)
 
   return (
     <div className="min-h-screen bg-surface-light dark:bg-surface-dark transition-colors duration-300">
-      {/* ── Top Navigation Bar ── */}
+      {/* ── Top Navigation ── */}
       <header className="bg-card-light dark:bg-card-dark shadow-sm dark:shadow-black/20 sticky top-0 z-10 transition-colors duration-300">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -95,18 +140,10 @@ export default function Dashboard() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-sm text-gray-600 dark:text-gray-300 hidden sm:block">{displayName}</span>
-            {/* Dark mode toggle */}
-            <button
-              onClick={toggle}
-              className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-              aria-label="Cambiar tema"
-            >
+            <button onClick={toggle} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" aria-label="Cambiar tema">
               {dark ? '☀️' : '🌙'}
             </button>
-            <button
-              onClick={() => { logout(); navigate('/login', { replace: true }) }}
-              className="text-sm text-gray-500 dark:text-gray-400 hover:text-red-500 transition-colors"
-            >
+            <button onClick={() => { logout(); navigate('/login', { replace: true }) }} className="text-sm text-gray-500 dark:text-gray-400 hover:text-red-500 transition-colors">
               Salir
             </button>
           </div>
@@ -114,100 +151,160 @@ export default function Dashboard() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-8 space-y-8">
-        {/* ── Welcome + stats ── */}
+        {/* ── Welcome ── */}
         <section>
           <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100">
             ¡Bienvenido de vuelta, {displayName}! 👋
           </h2>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">¿Qué idioma practicamos hoy?</p>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">Selecciona un idioma y genera tu próxima lección interactiva.</p>
+        </section>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
-            <StatCard
-              emoji="📚"
-              label="Lecciones generadas"
-              value={loadingLessons ? '…' : lessons.length}
-            />
-            <StatCard
-              emoji="💬"
-              label="Sesiones de chat"
-              value="—"
-            />
-            <StatCard
-              emoji="✨"
-              label="Motor IA"
-              value="Gemini"
-            />
+        {/* ── Language selector ── */}
+        <section>
+          <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">Idioma</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {LANGUAGES.map((lang) => (
+              <button
+                key={lang.value}
+                onClick={() => setIdioma(lang.value)}
+                className={`card flex items-center gap-3 transition-all hover:shadow-lg ${
+                  idioma === lang.value ? 'ring-2 ring-primary-500 bg-primary-50 dark:bg-primary-900/30' : ''
+                }`}
+              >
+                <span className="text-3xl">{lang.flag}</span>
+                <span className="font-semibold text-gray-800 dark:text-gray-100">{lang.label}</span>
+              </button>
+            ))}
           </div>
         </section>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* ── Generate Lesson Panel ── */}
-          <section className="card">
-            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">Generar Nueva Lección</h3>
-            <form onSubmit={handleGenerate} className="space-y-3">
-              {/* Topic */}
+        {/* ── Progress + Level ── */}
+        <section>
+          <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">
+            Nivel y Progreso
+          </h3>
+          {loadingProgress ? (
+            <p className="text-gray-400 text-sm">Cargando…</p>
+          ) : (
+            <div className="card space-y-4">
+              {/* Level pills */}
+              <div className="flex flex-wrap gap-2">
+                {levels.map((lvl) => {
+                  const isUnlocked = unlocked.includes(lvl)
+                  const isCurrent = nivel === lvl
+                  return (
+                    <button
+                      key={lvl}
+                      onClick={() => isUnlocked && setNivel(lvl)}
+                      disabled={!isUnlocked}
+                      className={`px-4 py-2 rounded-full text-sm font-semibold transition-all ${
+                        isCurrent
+                          ? 'bg-primary-600 text-white shadow-md'
+                          : isUnlocked
+                            ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 hover:bg-primary-100 dark:hover:bg-primary-800/40'
+                            : 'bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 cursor-not-allowed'
+                      }`}
+                    >
+                      {isUnlocked ? '' : '🔒 '}{lvl}
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* Progress bar */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tema</label>
-                <input
-                  type="text"
-                  className="input"
-                  placeholder="Ej: saludos y presentaciones, comida, negocios…"
-                  value={tema}
-                  onChange={(e) => setTema(e.target.value)}
-                  required
-                />
+                <div className="flex justify-between text-sm text-gray-500 dark:text-gray-400 mb-1">
+                  <span>Lecciones completadas en {nivel}</span>
+                  <span>{progreso?.completadas || 0} / {LESSONS_TO_UNLOCK}</span>
+                </div>
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+                  <div
+                    className="bg-primary-600 h-3 rounded-full transition-all duration-500"
+                    style={{ width: `${Math.min(100, ((progreso?.completadas || 0) / LESSONS_TO_UNLOCK) * 100)}%` }}
+                  />
+                </div>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                  Completa {LESSONS_TO_UNLOCK} lecciones para desbloquear el siguiente nivel
+                </p>
               </div>
 
-              {/* Language + Level row */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Idioma</label>
-                  <select className="input" value={idioma} onChange={(e) => setIdioma(e.target.value)}>
-                    {LANGUAGES.map((l) => (
-                      <option key={l} value={l}>{l.charAt(0).toUpperCase() + l.slice(1)}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Nivel</label>
-                  <select className="input" value={nivel} onChange={(e) => setNivel(e.target.value)}>
-                    {LEVELS.map((l) => (
-                      <option key={l.value} value={l.value}>{l.label}</option>
-                    ))}
-                  </select>
+              {/* Topic completion badges */}
+              <div>
+                <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Temas completados:</p>
+                <div className="flex flex-wrap gap-2">
+                  {TOPICS.map((t) => (
+                    <span
+                      key={t.value}
+                      className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${
+                        completedTopics.has(t.value)
+                          ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                          : 'bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500'
+                      }`}
+                    >
+                      {completedTopics.has(t.value) ? '✅' : '⬜'} {t.label}
+                    </span>
+                  ))}
                 </div>
               </div>
+            </div>
+          )}
+        </section>
 
-              {/* Provider badge – Gemini only */}
-              <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
-                <span className="inline-flex items-center gap-1 bg-primary-50 dark:bg-primary-800/30 text-primary-600 dark:text-primary-400 px-2 py-1 rounded-full font-medium">
-                  ✨ Google Gemini
-                </span>
-                <span>Motor de generación de lecciones</span>
-              </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* ── Topic selector + Generate ── */}
+          <section className="card">
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">
+              Generar Lección
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+              Elige un tema. El tipo de ejercicio se asignará aleatoriamente.
+            </p>
+            <div className="space-y-3">
+              {TOPICS.map((t) => (
+                <button
+                  key={t.value}
+                  onClick={() => setTopic(t.value)}
+                  className={`w-full text-left px-4 py-3 rounded-xl border transition-all flex items-center gap-3 ${
+                    topic === t.value
+                      ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 shadow-sm'
+                      : 'border-gray-200 dark:border-gray-700 hover:border-primary-300 dark:hover:border-primary-700'
+                  }`}
+                >
+                  <span className="text-2xl">{t.emoji}</span>
+                  <div>
+                    <p className="font-semibold text-gray-800 dark:text-gray-100 text-sm">{t.label}</p>
+                    <p className="text-xs text-gray-400 dark:text-gray-500">{t.desc}</p>
+                  </div>
+                  {completedTopics.has(t.value) && (
+                    <span className="ml-auto text-green-500">✅</span>
+                  )}
+                </button>
+              ))}
 
               {genError && (
                 <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm rounded-xl px-4 py-3">
                   {genError}
                 </div>
               )}
-              {genSuccess && (
-                <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300 text-sm rounded-xl px-4 py-3">
-                  {genSuccess}
-                </div>
-              )}
+
+              <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
+                <span className="inline-flex items-center gap-1 bg-primary-50 dark:bg-primary-800/30 text-primary-600 dark:text-primary-400 px-2 py-1 rounded-full font-medium">
+                  ✨ Google Gemini
+                </span>
+                <span>Motor de generación</span>
+              </div>
 
               <button
-                type="submit"
-                disabled={generating || !tema.trim()}
+                onClick={handleGenerate}
+                disabled={generating}
                 className="btn-primary w-full flex items-center justify-center gap-2"
               >
                 {generating && (
                   <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 )}
-                {generating ? 'Generando…' : '⚡ Generar Lección'}
+                {generating ? 'Generando ejercicio…' : '⚡ Generar Lección'}
               </button>
-            </form>
+            </div>
           </section>
 
           {/* ── Quick actions ── */}
@@ -216,8 +313,8 @@ export default function Dashboard() {
             <div className="card bg-gradient-to-br from-primary-600 to-primary-700 text-white">
               <h3 className="text-lg font-semibold mb-2">Chat con tu Tutor 🤖</h3>
               <p className="text-primary-100 text-sm mb-4">
-                Practica conversación y recibe correcciones gramaticales en tiempo real
-                con el modelo de IA local.
+                Practica conversación y recibe correcciones gramaticales en tiempo real.
+                También puedes enviar resultados de lecciones para que el tutor te explique tus errores.
               </p>
               <button
                 onClick={() => navigate('/chat')}
@@ -227,45 +324,47 @@ export default function Dashboard() {
               </button>
             </div>
 
-            {/* Selected lesson preview */}
-            {selectedLesson && (
-              <div className="card border-l-4 border-primary-500 max-h-64 overflow-y-auto">
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="font-semibold text-gray-800 dark:text-gray-100 truncate">{selectedLesson.tema}</h4>
-                  <span className="text-xs text-gray-400 capitalize ml-2">{selectedLesson.proveedor_ia}</span>
-                </div>
-                <p className="text-gray-600 dark:text-gray-300 text-sm whitespace-pre-wrap leading-relaxed">
-                  {selectedLesson.contenido}
-                </p>
-              </div>
-            )}
+            {/* Stats */}
+            <div className="grid grid-cols-2 gap-3">
+              <StatCard emoji="📚" label="Lecciones totales" value={loadingLessons ? '…' : lessons.length} />
+              <StatCard emoji="✅" label="Completadas" value={loadingLessons ? '…' : lessons.filter((l) => l.completada).length} />
+              <StatCard emoji="🎯" label="Nivel actual" value={nivel} />
+              <StatCard emoji="✨" label="Motor IA" value="Gemini" />
+            </div>
           </section>
         </div>
 
-        {/* ── Lessons List ── */}
+        {/* ── Recent Lessons ── */}
         <section>
-          <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">Mis Lecciones</h3>
+          <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">
+            Mis Lecciones — {LANGUAGES.find((l) => l.value === idioma)?.label}
+          </h3>
           {loadingLessons ? (
             <p className="text-gray-400 text-sm">Cargando…</p>
-          ) : lessons.length === 0 ? (
+          ) : filteredLessons.length === 0 ? (
             <p className="text-gray-400 text-sm">
-              Aún no tienes lecciones. ¡Genera tu primera lección arriba!
+              Aún no tienes lecciones en este idioma. ¡Genera tu primera lección!
             </p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {lessons.map((l) => (
+              {filteredLessons.map((l) => (
                 <button
                   key={l.id}
-                  onClick={() => setSelectedLesson(l)}
-                  className={`card text-left transition-all hover:shadow-lg ${
-                    selectedLesson?.id === l.id ? 'ring-2 ring-primary-500' : ''
-                  }`}
+                  onClick={() => navigate(`/leccion/${l.id}`, { state: { lesson: l } })}
+                  className="card text-left transition-all hover:shadow-lg"
                 >
-                  <h4 className="font-semibold text-gray-800 dark:text-gray-100 truncate">{l.tema}</h4>
-                  <p className="text-gray-400 text-xs mt-1 capitalize">{l.proveedor_ia}</p>
-                  <p className="text-gray-500 dark:text-gray-400 text-sm mt-2 line-clamp-3">
-                    {l.contenido.slice(0, 120)}…
-                  </p>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                      l.completada
+                        ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                        : 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
+                    }`}>
+                      {l.completada ? `✅ ${l.puntuacion}%` : '⏳ Pendiente'}
+                    </span>
+                    <span className="text-xs text-gray-400">{l.nivel}</span>
+                  </div>
+                  <h4 className="font-semibold text-gray-800 dark:text-gray-100 text-sm truncate">{l.tema}</h4>
+                  <p className="text-gray-400 text-xs mt-1 capitalize">{l.tipo_ejercicio.replace('_', ' ')}</p>
                 </button>
               ))}
             </div>

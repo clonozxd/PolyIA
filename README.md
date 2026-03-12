@@ -2,8 +2,11 @@
 
 Una aplicación Full-Stack para aprender idiomas con IA híbrida:
 
-- **Lecciones y actividades** generadas por una API en la nube (OpenAI GPT, Anthropic Claude o Google Gemini).
-- **Chat en tiempo real** con corrección gramatical ejecutado por un modelo de lenguaje local (SLM) vía Ollama.
+- **Lecciones interactivas** generadas por Google Gemini con 8 tipos de ejercicios.
+- **Chat en tiempo real** con corrección gramatical ejecutado por un modelo local (Qwen 3 8B) vía Ollama.
+- **Sistema de niveles** CEFR (A1→C2) para Español/Inglés/Alemán y JLPT (N5→N1) para Japonés.
+- **Text-to-Speech** con voces neuronales de Microsoft Edge (edge-tts) para dictados y pronunciación.
+- **Modo oscuro / claro** con persistencia.
 
 ---
 
@@ -14,8 +17,45 @@ Una aplicación Full-Stack para aprender idiomas con IA híbrida:
 | Frontend      | React 18 + Vite + Tailwind CSS + React Router v6         |
 | Backend       | Python 3.11+ · FastAPI · SQLAlchemy · JWT auth            |
 | Base de datos | PostgreSQL 16 (Docker, puerto externo **5433**)           |
-| IA en la nube | OpenAI GPT-4o-mini / Claude 3 Haiku / Gemini Flash       |
-| IA local      | Ollama + Qwen 2.5 (3 B) — corre en tu máquina            |
+| IA en la nube | Google Gemini 2.0 Flash (generación de lecciones)         |
+| IA local      | Ollama + **Qwen 3 (8B)** — chat tutor en tu máquina      |
+| TTS           | edge-tts — voces neuronales de Microsoft Edge             |
+
+---
+
+## 🎮 Tipos de Ejercicios
+
+| Tipo | Descripción |
+|------|-------------|
+| **Matching** | Unir pares de términos con definiciones/traducciones |
+| **Syntax Sorting** | Ordenar palabras desordenadas para formar oraciones |
+| **Multiple Choice** | Opción múltiple con explicación por pregunta |
+| **Categorization** | Clasificar palabras en categorías arrastrándolas |
+| **Fill in the Blank** | Completar el hueco con la palabra correcta |
+| **Translation** | Traducir una frase completa al idioma objetivo |
+| **Dictation** | Escuchar audio TTS y escribir lo que se escuchó |
+| **Flashcards** | Tarjetas giratorias con sistema de autoevaluación |
+
+---
+
+## 📚 Temas y Categorías
+
+1. **Vocabulario Temático** — Situaciones cotidianas, categorías de palabras, flashcards
+2. **Gramática Práctica** — Estructuras, tiempos verbales, ejercicios de relleno
+3. **Comprensión Auditiva** — Dictados, preguntas sobre audio, diálogos
+4. **Expresión Oral** — Pronunciación, dictado, traducción de voz
+5. **Lectura y Escritura** — Traducción, textos, ordenar oraciones
+6. **Cultura y Modismos** — Frases hechas, flashcards, opción múltiple
+
+---
+
+## 🎯 Sistema de Progresión
+
+- **Idiomas soportados**: Español 🇪🇸, Inglés 🇬🇧, Japonés 🇯🇵, Alemán 🇩🇪
+- **Niveles**: CEFR (A1 → A2 → B1 → B2 → C1 → C2) para ES/EN/DE, JLPT (N5 → N4 → N3 → N2 → N1) para JP
+- **Desbloqueo**: Se necesitan **10 lecciones completadas** en el nivel actual para desbloquear el siguiente
+- **Temas**: El usuario debe completar al menos 1 ejercicio de cada categoría de tema
+- **Ejercicios aleatorios**: El tipo de ejercicio se asigna aleatoriamente (según compatibilidad con el tema)
 
 ---
 
@@ -37,13 +77,15 @@ PolyIA/
 │       ├── index.css
 │       ├── App.jsx             # Rutas protegidas
 │       ├── context/
-│       │   └── AuthContext.jsx # Auth global (JWT)
+│       │   ├── AuthContext.jsx  # Auth global (JWT)
+│       │   └── ThemeContext.jsx # Tema oscuro/claro
 │       ├── services/
 │       │   └── api.js          # Axios configurado
 │       └── components/
-│           ├── LoginForm.jsx   # Login + Registro (email, contraseña, nombre)
-│           ├── Dashboard.jsx   # Panel principal + lecciones
-│           └── ChatTutor.jsx   # Chat con tutor local
+│           ├── LoginForm.jsx    # Login + Registro
+│           ├── Dashboard.jsx    # Panel + generación de lecciones
+│           ├── LessonExercise.jsx # Renderer interactivo de ejercicios
+│           └── ChatTutor.jsx    # Chat con tutor local
 └── backend/                    # FastAPI
     ├── main.py                 # App, CORS, endpoints
     ├── database.py             # Conexión SQLAlchemy (psycopg v3)
@@ -64,9 +106,9 @@ PolyIA/
 | Node.js | 20+ | https://nodejs.org/ |
 | Python | 3.11+ | https://www.python.org/ |
 | Docker Desktop | cualquiera | https://www.docker.com/products/docker-desktop/ |
-| Ollama *(opcional)* | — | https://ollama.com/ |
+| Ollama | — | https://ollama.com/ |
 
-Necesitas al menos **una** API key de: [OpenAI](https://platform.openai.com/), [Anthropic](https://console.anthropic.com/) o [Google AI Studio](https://aistudio.google.com/).
+Necesitas una API key de [Google AI Studio](https://aistudio.google.com/) para la generación de lecciones.
 
 ---
 
@@ -85,27 +127,12 @@ cd PolyIA
 docker compose up -d
 ```
 
-Verifica que el contenedor esté corriendo:
-
-```bash
-docker compose ps
-```
-
 > El contenedor `polyia_db` mapea el puerto **5433** del host al 5432 interno.
 > Credenciales por defecto: `polyia / polyia_secret` — base de datos: `polyia_db`.
 
 ---
 
 ### Paso 3 — Configurar y ejecutar el Backend
-
-#### macOS / Linux
-
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
 
 #### Windows (PowerShell)
 
@@ -117,9 +144,18 @@ pip install -r requirements.txt
 pip install "psycopg[binary]"      # necesario en Windows
 ```
 
+#### macOS / Linux
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
 #### Crear el archivo `.env`
 
-Crea `backend/.env` con este contenido (ajusta tus API keys):
+Crea `backend/.env` con este contenido:
 
 ```env
 # PostgreSQL
@@ -134,26 +170,16 @@ ACCESS_TOKEN_EXPIRE_MINUTES=60
 # CORS
 ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 
-# Cloud LLM — rellena al menos una
-OPENAI_API_KEY=
-OPENAI_MODEL=gpt-4o-mini
+# Google Gemini (generación de lecciones)
+GOOGLE_API_KEY=tu-api-key-de-google
+GOOGLE_MODEL=gemini-2.0-flash
 
-ANTHROPIC_API_KEY=
-ANTHROPIC_MODEL=claude-3-haiku-20240307
-
-GOOGLE_API_KEY=
-GOOGLE_MODEL=gemini-3-flash-preview
-
-# Ollama (opcional)
+# Ollama (chat tutor local)
 LOCAL_MODEL_URL=http://localhost:11434/api/generate
-LOCAL_MODEL_NAME=qwen2.5:3b
+LOCAL_MODEL_NAME=qwen3:8b
 ```
 
 #### Iniciar el backend
-
-    docker compose up -d (PostgreSQL)
-    uvicorn main:app --reload --port 8001
-    npm run dev
 
 ```bash
 uvicorn main:app --reload --port 8001
@@ -173,15 +199,15 @@ npm install
 npm run dev
 ```
 
-La aplicación estará en **`http://localhost:5173`**. El proxy de Vite redirige las peticiones `/api/*` al backend en `:8001`.
+La aplicación estará en **`http://localhost:5173`**.
 
 ---
 
-### Paso 5 — (Opcional) Modelo local con Ollama
+### Paso 5 — Modelo local con Ollama
 
 ```bash
-ollama pull qwen2.5:3b   # descarga ~2 GB
-ollama serve             # servidor en localhost:11434
+ollama pull qwen3:8b    # descarga ~5 GB
+ollama serve            # servidor en localhost:11434
 ```
 
 El backend detecta Ollama automáticamente. Si no está disponible, `/api/chat/local` indicará cómo activarlo.
@@ -218,35 +244,25 @@ docker compose down
 
 ---
 
-## 🧪 Resumen de comandos
-
-| Acción                       | Comando                                        |
-| ---------------------------- | ---------------------------------------------- |
-| Levantar DB                  | `docker compose up -d`                         |
-| Iniciar backend              | `uvicorn main:app --reload --port 8001`        |
-| Iniciar frontend             | `npm run dev` (desde `frontend/`)              |
-| Build de producción frontend | `npm run build` (desde `frontend/`)            |
-| Bajar DB                     | `docker compose down`                          |
-
----
-
 ## 📡 Endpoints de la API
 
-| Método | Ruta                   | Descripción                                | Auth |
-| ------ | ---------------------- | ------------------------------------------ | ---- |
-| POST   | `/api/auth/register`   | Registro (`email`, `password`, `nombre`)   | No   |
-| POST   | `/api/auth/login`      | Login — devuelve JWT                       | No   |
-| GET    | `/api/auth/me`         | Perfil del usuario autenticado             | JWT  |
-| POST   | `/api/leccion/generar` | Genera lección vía IA en la nube           | JWT  |
-| GET    | `/api/leccion/lista`   | Lista lecciones del usuario                | JWT  |
-| POST   | `/api/chat/local`      | Chat con SLM local + corrección gramatical | JWT  |
-| GET    | `/health`              | Health-check del servidor                  | No   |
+| Método | Ruta | Descripción | Auth |
+|--------|------|-------------|------|
+| POST | `/api/auth/register` | Registro (`email`, `password`, `nombre`) | No |
+| POST | `/api/auth/login` | Login — devuelve JWT | No |
+| GET | `/api/auth/me` | Perfil del usuario autenticado | JWT |
+| POST | `/api/leccion/generar` | Genera lección interactiva vía Gemini | JWT |
+| POST | `/api/leccion/{id}/completar` | Marca lección como completada | JWT |
+| GET | `/api/leccion/lista` | Lista lecciones del usuario | JWT |
+| GET | `/api/progreso/{idioma}` | Progreso por idioma | JWT |
+| GET | `/api/progreso` | Progreso de todos los idiomas | JWT |
+| POST | `/api/tts` | Text-to-Speech (edge-tts) | No |
+| POST | `/api/chat/local` | Chat con SLM local + corrección | JWT |
+| GET | `/health` | Health-check del servidor | No |
 
 ---
 
 ## 🗄️ Schema de la Base de Datos
-
-SQLAlchemy crea las tablas automáticamente al iniciar el backend. Si prefieres crearlas manualmente:
 
 ```sql
 CREATE TABLE IF NOT EXISTS usuarios (
@@ -260,12 +276,29 @@ CREATE TABLE IF NOT EXISTS usuarios (
 );
 
 CREATE TABLE IF NOT EXISTS lecciones (
-    id           SERIAL PRIMARY KEY,
-    tema         VARCHAR(255) NOT NULL,
-    contenido    TEXT         NOT NULL,
-    proveedor_ia VARCHAR(50)  NOT NULL DEFAULT 'openai',
-    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    usuario_id   INTEGER      NOT NULL REFERENCES usuarios (id) ON DELETE CASCADE
+    id              SERIAL PRIMARY KEY,
+    tema            VARCHAR(255) NOT NULL,
+    contenido       TEXT         NOT NULL,
+    idioma          VARCHAR(50)  NOT NULL DEFAULT 'ingles',
+    nivel           VARCHAR(10)  NOT NULL DEFAULT 'A1',
+    tipo_ejercicio  VARCHAR(50)  NOT NULL DEFAULT 'multiple_choice',
+    tema_categoria  VARCHAR(100) NOT NULL DEFAULT 'vocabulario_tematico',
+    completada      BOOLEAN      NOT NULL DEFAULT FALSE,
+    puntuacion      INTEGER      NOT NULL DEFAULT 0,
+    resultado_json  TEXT,
+    proveedor_ia    VARCHAR(50)  NOT NULL DEFAULT 'google',
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    usuario_id      INTEGER      NOT NULL REFERENCES usuarios (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS progreso_nivel (
+    id                 SERIAL PRIMARY KEY,
+    idioma             VARCHAR(50)  NOT NULL,
+    nivel              VARCHAR(10)  NOT NULL,
+    completadas        INTEGER      NOT NULL DEFAULT 0,
+    temas_completados  TEXT         NOT NULL DEFAULT '',
+    usuario_id         INTEGER      NOT NULL REFERENCES usuarios (id) ON DELETE CASCADE,
+    UNIQUE (usuario_id, idioma, nivel)
 );
 
 CREATE TABLE IF NOT EXISTS mensajes (
@@ -284,42 +317,19 @@ CREATE TABLE IF NOT EXISTS mensajes (
 
 ### Backend (`backend/.env`)
 
-| Variable                      | Descripción                             | Ejemplo / Default                                            |
-| ----------------------------- | --------------------------------------- | ------------------------------------------------------------ |
-| `DATABASE_URL`                | Conexión PostgreSQL                     | `postgresql://polyia:polyia_secret@localhost:5433/polyia_db`  |
-| `SECRET_KEY`                  | Secreto para firmar JWT — **cámbialo**  | string aleatorio largo                                       |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | Duración del token JWT                  | `60`                                                         |
-| `ALLOWED_ORIGINS`             | Orígenes CORS (coma-separados)          | `http://localhost:5173`                                      |
-| `OPENAI_API_KEY`              | API key de OpenAI                       | `sk-...`                                                     |
-| `ANTHROPIC_API_KEY`           | API key de Anthropic                    | `sk-ant-...`                                                 |
-| `GOOGLE_API_KEY`              | API key de Google AI                    | `AIza...`                                                    |
-| `LOCAL_MODEL_URL`             | URL del servidor Ollama                 | `http://localhost:11434/api/generate`                        |
-| `LOCAL_MODEL_NAME`            | Modelo Ollama                           | `qwen2.5:3b`                                                |
+| Variable | Descripción | Ejemplo / Default |
+|----------|-------------|-------------------|
+| `DATABASE_URL` | Conexión PostgreSQL | `postgresql://polyia:polyia_secret@localhost:5433/polyia_db` |
+| `SECRET_KEY` | Secreto para firmar JWT — **cámbialo** | string aleatorio largo |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Duración del token JWT | `60` |
+| `ALLOWED_ORIGINS` | Orígenes CORS (coma-separados) | `http://localhost:5173` |
+| `GOOGLE_API_KEY` | API key de Google AI | `AIza...` |
+| `GOOGLE_MODEL` | Modelo de Gemini | `gemini-2.0-flash` |
+| `LOCAL_MODEL_URL` | URL del servidor Ollama | `http://localhost:11434/api/generate` |
+| `LOCAL_MODEL_NAME` | Modelo Ollama | `qwen3:8b` |
 
 ### Frontend (`frontend/.env`)
 
-| Variable            | Descripción                                             | Default   |
-| ------------------- | ------------------------------------------------------- | --------- |
-| `VITE_API_BASE_URL` | URL base del backend (vacío = usa Vite proxy)           | *(vacío)* |
-
----
-
-## 🔮 Escalabilidad Futura
-
-- **Alembic** para migraciones de BD (`alembic init alembic`).
-- **Async FastAPI** con `create_async_engine` + `asyncpg`.
-- **Streaming** de respuestas con `StreamingResponse`.
-- **WebSockets** para el chat en tiempo real.
-- **Redis** para caché de lecciones generadas.
-- **Múltiples idiomas** — el campo `nivel_idioma` se selecciona por lección/chat, no en el registro.
-
----
-
-## 🐛 Notas para Windows
-
-| Problema | Solución |
-|---|---|
-| `UnicodeDecodeError` con `psycopg2` | Se usa `psycopg` v3 en lugar de `psycopg2`. Instalar con `pip install "psycopg[binary]"`. |
-| Puerto 5432 ocupado por PostgreSQL local | Docker mapea al puerto **5433** (`docker-compose.yml`). |
-| Puerto 8000 con procesos fantasma | El backend usa el puerto **8001** por defecto. |
-| `bcrypt` error con `passlib` | `bcrypt` está fijado a `4.0.1` en `requirements.txt`. |
+| Variable | Descripción | Default |
+|----------|-------------|---------|
+| `VITE_API_BASE_URL` | URL del backend (vacío = usa proxy Vite) | `""` |

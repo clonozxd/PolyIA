@@ -29,35 +29,104 @@ class RegisterRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Lección
 # ---------------------------------------------------------------------------
+
+# Allowed languages
+IDIOMAS_PERMITIDOS = ["espanol", "ingles", "japones", "aleman"]
+
+# CEFR levels for Spanish / English / German
+NIVELES_CEFR = ["A1", "A2", "B1", "B2", "C1", "C2"]
+
+# JLPT levels for Japanese (N5 is easiest → N1 hardest)
+NIVELES_JLPT = ["N5", "N4", "N3", "N2", "N1"]
+
+# Topic categories
+TEMAS_CATEGORIAS = [
+    "vocabulario_tematico",
+    "gramatica_practica",
+    "comprension_auditiva",
+    "expresion_oral",
+    "lectura_escritura",
+    "cultura_modismos",
+]
+
+# Exercise types (picked randomly by the backend)
+TIPOS_EJERCICIO = [
+    "matching",           # Unir pares
+    "syntax_sorting",     # Ordenar la oración
+    "multiple_choice",    # Opción múltiple
+    "categorization",     # Categorización
+    "fill_blank",         # Completar el hueco
+    "translation",        # Traducción directa
+    "dictation",          # Dictado
+    "flashcards",         # Tarjetas giratorias
+]
+
+LESSONS_TO_UNLOCK = 10  # Lessons needed at current level to unlock next
+
+
 class GenerarLeccionRequest(BaseModel):
-    tema: str = Field(min_length=2, max_length=200)
-    nivel_idioma: str = Field(default="principiante")
-    idioma_objetivo: str = Field(default="inglés")
-    proveedor: str = Field(
-        default="openai",
-        description="Cloud provider: 'openai', 'anthropic' or 'google'",
+    idioma: str = Field(description="Language: espanol, ingles, japones, aleman")
+    tema_categoria: str = Field(description="Topic category")
+    nivel: str | None = Field(
+        default=None,
+        description="Level (auto-detected if omitted). CEFR for ES/EN/DE, JLPT for JP.",
     )
+
+
+class CompletarLeccionRequest(BaseModel):
+    puntuacion: int = Field(ge=0, le=100)
+    resultado_json: str = Field(default="{}")
 
 
 class LeccionResponse(BaseModel):
     id: int
     tema: str
     contenido: str
+    idioma: str
+    nivel: str
+    tipo_ejercicio: str
+    tema_categoria: str
+    completada: bool
+    puntuacion: int
     proveedor_ia: str
 
     model_config = {"from_attributes": True}
 
 
+class ProgresoResponse(BaseModel):
+    idioma: str
+    nivel_actual: str
+    completadas: int
+    necesarias: int
+    temas_completados: list[str]
+    niveles_desbloqueados: list[str]
+
+
+class TTSRequest(BaseModel):
+    texto: str = Field(min_length=1, max_length=1000)
+    idioma: str = Field(default="ingles")
+
+
 # ---------------------------------------------------------------------------
 # Chat
 # ---------------------------------------------------------------------------
+class LeccionAdjunta(BaseModel):
+    """Subset of lesson data the user can attach for the tutor to analyze."""
+    tema: str = ""
+    idioma: str = ""
+    nivel: str = ""
+    tipo_ejercicio: str = ""
+    tema_categoria: str = ""
+    puntuacion: int = 0
+    contenido: str = ""
+    resultado_json: str | None = None
+
+
 class ChatRequest(BaseModel):
-    mensaje: str = Field(min_length=1, max_length=2000)
-    idioma_objetivo: str = Field(default="inglés")
-    nivel_idioma: str = Field(default="principiante")
+    mensaje: str = Field(min_length=1, max_length=4000)
+    leccion_adjunta: LeccionAdjunta | None = None
 
 
 class ChatResponse(BaseModel):
     respuesta: str
-    correccion: str | None = None
     mensaje_id: int | None = None

@@ -16,6 +16,7 @@ import { ThemeProvider } from './context/ThemeContext'
 import LoginForm from './components/LoginForm'
 import Dashboard from './components/Dashboard'
 import ChatTutor from './components/ChatTutor'
+import LessonExercise from './components/LessonExercise'
 
 /**
  * ProtectedRoute – wrapper that enforces authentication.
@@ -62,6 +63,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <ChatTutor />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/leccion/:id"
+        element={
+          <ProtectedRoute>
+            <LessonExercise />
           </ProtectedRoute>
         }
       />
