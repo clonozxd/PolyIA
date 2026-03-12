@@ -3,16 +3,22 @@ main.py – FastAPI application entry-point for PolyIA.
 
 Endpoints
 ---------
-POST /api/auth/register  – Create a new account
-POST /api/auth/login     – Authenticate and receive a JWT
-GET  /api/auth/me        – Return the current user profile
-POST /api/leccion/generar – Generate a lesson via a cloud LLM API
-POST /api/chat/local     – Chat with the local SLM tutor + grammar correction
-GET  /api/leccion/lista  – List all lessons for the authenticated user
+POST /api/auth/register            – Create a new account
+POST /api/auth/login               – Authenticate and receive a JWT
+GET  /api/auth/me                  – Return the current user profile
+POST /api/leccion/generar          – Generate a structured exercise via Google Gemini
+POST /api/leccion/{id}/completar   – Mark a lesson as completed
+GET  /api/leccion/lista            – List all lessons for the authenticated user
+GET  /api/progreso/{idioma}        – Get level progress for a language
+GET  /api/progreso                 – Get progress for all languages
+POST /api/tts                      – Generate audio from text using edge-tts
+POST /api/chat/local               – Chat with the local SLM tutor + grammar correction
 """
 
+import io
 import json
 import os
+import random
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -21,27 +27,37 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
-from models import Leccion, Mensaje, Usuario
+from models import Leccion, Mensaje, ProgresoNivel, Usuario
 from schemas import (
     ChatRequest,
     ChatResponse,
+    CompletarLeccionRequest,
     GenerarLeccionRequest,
+    IDIOMAS_PERMITIDOS,
     LeccionResponse,
+    LESSONS_TO_UNLOCK,
     LoginRequest,
+    NIVELES_CEFR,
+    NIVELES_JLPT,
+    ProgresoResponse,
     RegisterRequest,
+    TEMAS_CATEGORIAS,
+    TIPOS_EJERCICIO,
     TokenResponse,
+    TTSRequest,
 )
 
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Create DB tables on startup (use Alembic migrations in production)
+# Create DB tables on startup
 # ---------------------------------------------------------------------------
 Base.metadata.create_all(bind=engine)
 
@@ -51,7 +67,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(
     title="PolyIA API",
     description="Hybrid Language Tutor: cloud LLM for lessons, local SLM for chat.",
-    version="1.0.0",
+    version="2.0.0",
 )
 
 ALLOWED_ORIGINS: list[str] = os.getenv(
@@ -118,11 +134,98 @@ def _get_current_user(
 
 
 # ---------------------------------------------------------------------------
+# Language / Level helpers
+# ---------------------------------------------------------------------------
+
+def _get_levels(idioma: str) -> list[str]:
+    """Return the level progression for a given language."""
+    if idioma == "japones":
+        return NIVELES_JLPT
+    return NIVELES_CEFR
+
+
+def _get_current_level(db: Session, user_id: int, idioma: str) -> str:
+    """Determine the highest unlocked level for a user in a language."""
+    levels = _get_levels(idioma)
+    for i, level in enumerate(levels):
+        prog = (
+            db.query(ProgresoNivel)
+            .filter(
+                ProgresoNivel.usuario_id == user_id,
+                ProgresoNivel.idioma == idioma,
+                ProgresoNivel.nivel == level,
+            )
+            .first()
+        )
+        if prog is None or prog.completadas < LESSONS_TO_UNLOCK:
+            return level
+    return levels[-1]
+
+
+def _get_unlocked_levels(db: Session, user_id: int, idioma: str) -> list[str]:
+    """Return the list of levels the user has access to."""
+    levels = _get_levels(idioma)
+    unlocked = [levels[0]]
+    for i, level in enumerate(levels[:-1]):
+        prog = (
+            db.query(ProgresoNivel)
+            .filter(
+                ProgresoNivel.usuario_id == user_id,
+                ProgresoNivel.idioma == idioma,
+                ProgresoNivel.nivel == level,
+            )
+            .first()
+        )
+        if prog and prog.completadas >= LESSONS_TO_UNLOCK:
+            unlocked.append(levels[i + 1])
+        else:
+            break
+    return unlocked
+
+
+IDIOMA_DISPLAY = {
+    "espanol": "español",
+    "ingles": "inglés",
+    "japones": "japonés",
+    "aleman": "alemán",
+}
+
+TEMA_DISPLAY = {
+    "vocabulario_tematico": "Vocabulario Temático",
+    "gramatica_practica": "Gramática Práctica",
+    "comprension_auditiva": "Comprensión Auditiva",
+    "expresion_oral": "Expresión Oral y Pronunciación",
+    "lectura_escritura": "Lectura y Escritura",
+    "cultura_modismos": "Cultura y Modismos",
+}
+
+TIPO_DISPLAY = {
+    "matching": "Unir pares (Matching)",
+    "syntax_sorting": "Ordenar la oración",
+    "multiple_choice": "Opción múltiple",
+    "categorization": "Categorización",
+    "fill_blank": "Completar el hueco",
+    "translation": "Traducción directa",
+    "dictation": "Dictado",
+    "flashcards": "Tarjetas giratorias (Flashcards)",
+}
+
+# Map topic → compatible exercise types
+TOPIC_EXERCISE_MAP: dict[str, list[str]] = {
+    "vocabulario_tematico": ["matching", "flashcards", "multiple_choice", "categorization"],
+    "gramatica_practica": ["fill_blank", "syntax_sorting", "multiple_choice", "categorization"],
+    "comprension_auditiva": ["dictation", "multiple_choice", "fill_blank"],
+    "expresion_oral": ["dictation", "translation", "flashcards"],
+    "lectura_escritura": ["translation", "fill_blank", "syntax_sorting", "multiple_choice"],
+    "cultura_modismos": ["flashcards", "matching", "multiple_choice", "fill_blank"],
+}
+
+
+# ---------------------------------------------------------------------------
 # Auth endpoints
 # ---------------------------------------------------------------------------
 @app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenResponse:
-    """Register a new user and return a JWT."""
     if db.query(Usuario).filter(Usuario.email == payload.email).first():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -137,16 +240,11 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenRe
     db.commit()
     db.refresh(user)
     token = _create_access_token({"sub": str(user.id)})
-    return TokenResponse(
-        access_token=token,
-        usuario_id=user.id,
-        nombre=user.nombre,
-    )
+    return TokenResponse(access_token=token, usuario_id=user.id, nombre=user.nombre)
 
 
 @app.post("/api/auth/login")
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
-    """Authenticate a user and return a JWT."""
     user = db.query(Usuario).filter(Usuario.email == payload.email).first()
     if not user or not _verify_password(payload.password, user.hashed_password):
         raise HTTPException(
@@ -154,87 +252,187 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
             detail="Credenciales incorrectas.",
         )
     token = _create_access_token({"sub": str(user.id)})
-    return TokenResponse(
-        access_token=token,
-        usuario_id=user.id,
-        nombre=user.nombre,
-    )
+    return TokenResponse(access_token=token, usuario_id=user.id, nombre=user.nombre)
 
 
 @app.get("/api/auth/me")
 def me(current_user: Usuario = Depends(_get_current_user)):
-    """Return the current user's profile."""
     return {
         "id": current_user.id,
         "email": current_user.email,
         "nombre": current_user.nombre,
-        "nivel_idioma": current_user.nivel_idioma,
     }
 
 
 # ---------------------------------------------------------------------------
-# Lesson generation – cloud LLM (OpenAI / Anthropic / Google)
+# Lesson generation – Google Gemini only
 # ---------------------------------------------------------------------------
 
-def _build_lesson_prompt(tema: str, nivel: str, idioma: str) -> str:
-    return (
-        f"Eres un profesor experto de idiomas. Crea una lección completa de {idioma} "
-        f"para un estudiante de nivel '{nivel}' sobre el tema '{tema}'.\n\n"
-        "La lección DEBE incluir:\n"
-        "1. Introducción y objetivos\n"
-        "2. Vocabulario clave (mínimo 10 palabras con traducción)\n"
-        "3. Explicación gramatical con ejemplos\n"
-        "4. Diálogos de ejemplo\n"
-        "5. Actividades prácticas (ejercicios de relleno, traducción o conversación)\n\n"
-        "Responde en español, pero usa el idioma objetivo en los ejemplos."
+def _build_exercise_prompt(
+    tipo: str, tema_cat: str, nivel: str, idioma: str
+) -> str:
+    """Build a detailed prompt that tells Gemini to produce structured JSON."""
+    idioma_display = IDIOMA_DISPLAY.get(idioma, idioma)
+    tema_display = TEMA_DISPLAY.get(tema_cat, tema_cat)
+    tipo_display = TIPO_DISPLAY.get(tipo, tipo)
+
+    base = (
+        f"Eres un profesor experto de idiomas creando ejercicios interactivos para una app. "
+        f"Genera UN ejercicio de tipo '{tipo_display}' para estudiantes de {idioma_display} "
+        f"de nivel {nivel}, dentro de la categoría '{tema_display}'.\n\n"
     )
 
+    json_schemas = {
+        "matching": (
+            "El ejercicio es de UNIR PARES. El usuario debe emparejar términos con definiciones/traducciones.\n"
+            "Genera exactamente este JSON (8-10 pares):\n"
+            "```json\n"
+            '{\n'
+            '  "instrucciones": "...",\n'
+            '  "pares": [\n'
+            '    {"termino": "...", "definicion": "..."},\n'
+            '    ...\n'
+            '  ]\n'
+            '}\n'
+            "```"
+        ),
+        "syntax_sorting": (
+            "El ejercicio es de ORDENAR LA ORACIÓN. Se muestra una frase y el usuario arma la oración "
+            "tocando bloques de palabras desordenadas.\n"
+            "Genera exactamente este JSON (5-6 ejercicios):\n"
+            "```json\n"
+            '{\n'
+            '  "instrucciones": "...",\n'
+            '  "ejercicios": [\n'
+            '    {\n'
+            '      "frase_correcta": "...",\n'
+            '      "palabras_desordenadas": ["...", "..."],\n'
+            '      "traduccion": "..."\n'
+            '    }\n'
+            '  ]\n'
+            '}\n'
+            "```"
+        ),
+        "multiple_choice": (
+            "El ejercicio es de OPCIÓN MÚLTIPLE. Cada pregunta tiene 4 opciones y una respuesta correcta.\n"
+            "Genera exactamente este JSON (6-8 preguntas):\n"
+            "```json\n"
+            '{\n'
+            '  "instrucciones": "...",\n'
+            '  "preguntas": [\n'
+            '    {\n'
+            '      "pregunta": "...",\n'
+            '      "opciones": ["A", "B", "C", "D"],\n'
+            '      "respuesta_correcta": 0,\n'
+            '      "explicacion": "..."\n'
+            '    }\n'
+            '  ]\n'
+            '}\n'
+            "```\n"
+            "respuesta_correcta es el índice (0-3) de la opción correcta."
+        ),
+        "categorization": (
+            "El ejercicio es de CATEGORIZACIÓN. El usuario clasifica palabras arrastrándolas a categorías.\n"
+            "Genera exactamente este JSON (2 categorías, 8-10 palabras):\n"
+            "```json\n"
+            '{\n'
+            '  "instrucciones": "...",\n'
+            '  "categorias": ["Categoría A", "Categoría B"],\n'
+            '  "palabras": [\n'
+            '    {"palabra": "...", "categoria": 0},\n'
+            '    ...\n'
+            '  ]\n'
+            '}\n'
+            "```\n"
+            "categoria es el índice (0 o 1) de la categoría correcta."
+        ),
+        "fill_blank": (
+            "El ejercicio es de COMPLETAR EL HUECO. Una oración con una o dos palabras faltantes que "
+            "el usuario debe escribir.\n"
+            "Genera exactamente este JSON (6-8 ejercicios):\n"
+            "```json\n"
+            '{\n'
+            '  "instrucciones": "...",\n'
+            '  "ejercicios": [\n'
+            '    {\n'
+            '      "oracion": "They _____ to the cinema yesterday",\n'
+            '      "respuesta": "went",\n'
+            '      "pista": "Past tense of go"\n'
+            '    }\n'
+            '  ]\n'
+            '}\n'
+            "```"
+        ),
+        "translation": (
+            "El ejercicio es de TRADUCCIÓN DIRECTA. Se muestra una frase en español y el usuario la "
+            "traduce completamente.\n"
+            "Genera exactamente este JSON (5-6 ejercicios):\n"
+            "```json\n"
+            '{\n'
+            '  "instrucciones": "...",\n'
+            '  "ejercicios": [\n'
+            '    {\n'
+            '      "texto_original": "...",\n'
+            '      "traduccion_correcta": "...",\n'
+            '      "traducciones_alternativas": ["..."]\n'
+            '    }\n'
+            '  ]\n'
+            '}\n'
+            "```"
+        ),
+        "dictation": (
+            "El ejercicio es de DICTADO. Se reproducirá un audio y el usuario debe escribir lo que escucha.\n"
+            "Genera exactamente este JSON (5-6 frases, nivel adecuado):\n"
+            "```json\n"
+            '{\n'
+            '  "instrucciones": "...",\n'
+            '  "ejercicios": [\n'
+            '    {\n'
+            '      "texto": "The weather is beautiful today",\n'
+            '      "traduccion": "El clima está hermoso hoy"\n'
+            '    }\n'
+            '  ]\n'
+            '}\n'
+            "```"
+        ),
+        "flashcards": (
+            "El ejercicio es de TARJETAS GIRATORIAS (Flashcards). El usuario ve un concepto e intenta "
+            "recordar su significado antes de voltear la tarjeta.\n"
+            "Genera exactamente este JSON (8-10 tarjetas):\n"
+            "```json\n"
+            '{\n'
+            '  "instrucciones": "...",\n'
+            '  "tarjetas": [\n'
+            '    {\n'
+            '      "frente": "...",\n'
+            '      "reverso": "...",\n'
+            '      "ejemplo": "..."\n'
+            '    }\n'
+            '  ]\n'
+            '}\n'
+            "```"
+        ),
+    }
 
-async def _call_openai(prompt: str) -> str:
-    api_key = os.getenv("OPENAI_API_KEY", "")
-    if not api_key:
-        raise HTTPException(status_code=503, detail="OPENAI_API_KEY no configurada.")
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.7,
-            },
-        )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    schema_hint = json_schemas.get(tipo, json_schemas["multiple_choice"])
 
-
-async def _call_anthropic(prompt: str) -> str:
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY no configurada.")
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            },
-            json={
-                "model": os.getenv("ANTHROPIC_MODEL", "claude-3-haiku-20240307"),
-                "max_tokens": 2048,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-        )
-    resp.raise_for_status()
-    return resp.json()["content"][0]["text"]
+    return (
+        base
+        + schema_hint
+        + "\n\nIMPORTANTE:\n"
+        "- Responde SOLAMENTE con el JSON, sin texto extra antes o después.\n"
+        "- Todo el contenido del ejercicio debe ser apropiado para el nivel indicado.\n"
+        f"- Los ejemplos y vocabulario deben ser de {idioma_display} nivel {nivel}.\n"
+        "- Las instrucciones deben estar en español.\n"
+    )
 
 
 async def _call_google(prompt: str) -> str:
     api_key = os.getenv("GOOGLE_API_KEY", "")
     if not api_key:
         raise HTTPException(status_code=503, detail="GOOGLE_API_KEY no configurada.")
-    model = os.getenv("GOOGLE_MODEL", "gemini-1.5-flash")
-    async with httpx.AsyncClient(timeout=60) as client:
+    model = os.getenv("GOOGLE_MODEL", "gemini-2.0-flash")
+    async with httpx.AsyncClient(timeout=90) as client:
         resp = await client.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
             json={"contents": [{"parts": [{"text": prompt}]}]},
@@ -249,36 +447,126 @@ async def generar_leccion(
     db: Session = Depends(get_db),
     current_user: Usuario = Depends(_get_current_user),
 ) -> LeccionResponse:
-    """
-    Generate a language lesson using the selected cloud LLM provider.
+    """Generate a structured interactive exercise via Google Gemini."""
+    # Validate language
+    if payload.idioma not in IDIOMAS_PERMITIDOS:
+        raise HTTPException(400, f"Idioma no soportado. Opciones: {IDIOMAS_PERMITIDOS}")
 
-    Supported providers: 'openai', 'anthropic', 'google'.
-    Set the corresponding API key in the .env file to activate each provider.
-    """
-    prompt = _build_lesson_prompt(
-        payload.tema, payload.nivel_idioma, payload.idioma_objetivo
-    )
+    # Validate topic
+    if payload.tema_categoria not in TEMAS_CATEGORIAS:
+        raise HTTPException(400, f"Categoría no válida. Opciones: {TEMAS_CATEGORIAS}")
+
+    # Determine level
+    unlocked = _get_unlocked_levels(db, current_user.id, payload.idioma)
+    if payload.nivel:
+        all_levels = _get_levels(payload.idioma)
+        if payload.nivel not in all_levels:
+            raise HTTPException(400, f"Nivel no válido para {payload.idioma}. Opciones: {all_levels}")
+        if payload.nivel not in unlocked:
+            raise HTTPException(
+                403,
+                f"Nivel {payload.nivel} no desbloqueado. "
+                f"Completa {LESSONS_TO_UNLOCK} lecciones del nivel anterior. "
+                f"Niveles disponibles: {unlocked}",
+            )
+        nivel = payload.nivel
+    else:
+        nivel = _get_current_level(db, current_user.id, payload.idioma)
+
+    # Pick a random exercise type compatible with the topic
+    compatible_types = TOPIC_EXERCISE_MAP.get(payload.tema_categoria, TIPOS_EJERCICIO)
+    tipo = random.choice(compatible_types)
+
+    # Build prompt and call Gemini
+    prompt = _build_exercise_prompt(tipo, payload.tema_categoria, nivel, payload.idioma)
 
     try:
-        if payload.proveedor == "anthropic":
-            contenido = await _call_anthropic(prompt)
-        elif payload.proveedor == "google":
-            contenido = await _call_google(prompt)
-        else:
-            contenido = await _call_openai(prompt)
+        raw_content = await _call_google(prompt)
     except httpx.HTTPStatusError as exc:
         raise HTTPException(
             status_code=502,
             detail=f"Error del proveedor de IA: {exc.response.text}",
         ) from exc
 
+    # Try to extract clean JSON from the response
+    json_match = re.search(r"\{.*\}", raw_content, re.DOTALL)
+    if json_match:
+        contenido = json_match.group()
+        try:
+            json.loads(contenido)
+        except json.JSONDecodeError:
+            contenido = raw_content
+    else:
+        contenido = raw_content
+
+    tema_display = TEMA_DISPLAY.get(payload.tema_categoria, payload.tema_categoria)
+    tipo_display = TIPO_DISPLAY.get(tipo, tipo)
+    tema_titulo = f"{tema_display} — {tipo_display} ({nivel})"
+
     leccion = Leccion(
-        tema=payload.tema,
+        tema=tema_titulo,
         contenido=contenido,
-        proveedor_ia=payload.proveedor,
+        idioma=payload.idioma,
+        nivel=nivel,
+        tipo_ejercicio=tipo,
+        tema_categoria=payload.tema_categoria,
+        proveedor_ia="google",
         usuario_id=current_user.id,
     )
     db.add(leccion)
+    db.commit()
+    db.refresh(leccion)
+    return LeccionResponse.model_validate(leccion)
+
+
+@app.post("/api/leccion/{leccion_id}/completar", response_model=LeccionResponse)
+def completar_leccion(
+    leccion_id: int,
+    payload: CompletarLeccionRequest,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(_get_current_user),
+) -> LeccionResponse:
+    """Mark a lesson as completed and update progress."""
+    leccion = (
+        db.query(Leccion)
+        .filter(Leccion.id == leccion_id, Leccion.usuario_id == current_user.id)
+        .first()
+    )
+    if not leccion:
+        raise HTTPException(404, "Lección no encontrada.")
+    if leccion.completada:
+        raise HTTPException(400, "La lección ya fue completada.")
+
+    leccion.completada = True
+    leccion.puntuacion = payload.puntuacion
+    leccion.resultado_json = payload.resultado_json
+
+    # Update progress tracking
+    prog = (
+        db.query(ProgresoNivel)
+        .filter(
+            ProgresoNivel.usuario_id == current_user.id,
+            ProgresoNivel.idioma == leccion.idioma,
+            ProgresoNivel.nivel == leccion.nivel,
+        )
+        .first()
+    )
+    if not prog:
+        prog = ProgresoNivel(
+            usuario_id=current_user.id,
+            idioma=leccion.idioma,
+            nivel=leccion.nivel,
+            completadas=0,
+            temas_completados="",
+        )
+        db.add(prog)
+
+    prog.completadas += 1
+    # Track topic completion
+    existing_topics = set(t for t in prog.temas_completados.split(",") if t)
+    existing_topics.add(leccion.tema_categoria)
+    prog.temas_completados = ",".join(sorted(existing_topics))
+
     db.commit()
     db.refresh(leccion)
     return LeccionResponse.model_validate(leccion)
@@ -300,25 +588,149 @@ def listar_lecciones(
 
 
 # ---------------------------------------------------------------------------
+# Progress endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/progreso/{idioma}", response_model=ProgresoResponse)
+def obtener_progreso(
+    idioma: str,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(_get_current_user),
+) -> ProgresoResponse:
+    """Get the user's progress for a specific language."""
+    if idioma not in IDIOMAS_PERMITIDOS:
+        raise HTTPException(400, f"Idioma no soportado. Opciones: {IDIOMAS_PERMITIDOS}")
+
+    nivel_actual = _get_current_level(db, current_user.id, idioma)
+    unlocked = _get_unlocked_levels(db, current_user.id, idioma)
+
+    prog = (
+        db.query(ProgresoNivel)
+        .filter(
+            ProgresoNivel.usuario_id == current_user.id,
+            ProgresoNivel.idioma == idioma,
+            ProgresoNivel.nivel == nivel_actual,
+        )
+        .first()
+    )
+
+    completadas = prog.completadas if prog else 0
+    temas = [t for t in (prog.temas_completados.split(",") if prog else []) if t]
+
+    return ProgresoResponse(
+        idioma=idioma,
+        nivel_actual=nivel_actual,
+        completadas=completadas,
+        necesarias=LESSONS_TO_UNLOCK,
+        temas_completados=temas,
+        niveles_desbloqueados=unlocked,
+    )
+
+
+@app.get("/api/progreso", response_model=list[ProgresoResponse])
+def obtener_todo_progreso(
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(_get_current_user),
+) -> list[ProgresoResponse]:
+    """Get progress for all languages."""
+    result = []
+    for idioma in IDIOMAS_PERMITIDOS:
+        nivel_actual = _get_current_level(db, current_user.id, idioma)
+        unlocked = _get_unlocked_levels(db, current_user.id, idioma)
+        prog = (
+            db.query(ProgresoNivel)
+            .filter(
+                ProgresoNivel.usuario_id == current_user.id,
+                ProgresoNivel.idioma == idioma,
+                ProgresoNivel.nivel == nivel_actual,
+            )
+            .first()
+        )
+        completadas = prog.completadas if prog else 0
+        temas = [t for t in (prog.temas_completados.split(",") if prog else []) if t]
+        result.append(ProgresoResponse(
+            idioma=idioma,
+            nivel_actual=nivel_actual,
+            completadas=completadas,
+            necesarias=LESSONS_TO_UNLOCK,
+            temas_completados=temas,
+            niveles_desbloqueados=unlocked,
+        ))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# TTS – edge-tts
+# ---------------------------------------------------------------------------
+
+TTS_VOICES: dict[str, str] = {
+    "espanol": "es-MX-DaliaNeural",
+    "ingles": "en-US-JennyNeural",
+    "japones": "ja-JP-NanamiNeural",
+    "aleman": "de-DE-KatjaNeural",
+}
+
+
+@app.post("/api/tts")
+async def text_to_speech(payload: TTSRequest):
+    """Generate speech audio from text using edge-tts."""
+    try:
+        import edge_tts
+    except ImportError:
+        raise HTTPException(503, "edge-tts no está instalado. Ejecuta: pip install edge-tts")
+
+    voice = TTS_VOICES.get(payload.idioma, TTS_VOICES["ingles"])
+    communicate = edge_tts.Communicate(payload.texto, voice)
+
+    buffer = io.BytesIO()
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            buffer.write(chunk["data"])
+
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="audio/mpeg",
+        headers={"Content-Disposition": "inline; filename=tts.mp3"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Local SLM chat – grammar correction and conversational feedback
 # ---------------------------------------------------------------------------
 
 LOCAL_MODEL_URL: str = os.getenv(
     "LOCAL_MODEL_URL", "http://localhost:11434/api/generate"
 )
-LOCAL_MODEL_NAME: str = os.getenv("LOCAL_MODEL_NAME", "qwen2.5:3b")
+LOCAL_MODEL_NAME: str = os.getenv("LOCAL_MODEL_NAME", "qwen3:8b")
 
 
-def _build_chat_prompt(mensaje: str, nivel: str, idioma: str) -> str:
+def _build_chat_prompt(mensaje: str, leccion_adjunta: dict | None = None) -> str:
+    """Build a chat prompt. When a lesson is attached, include its data for analysis."""
+    if leccion_adjunta:
+        return (
+            "Eres un tutor de idiomas experto, amigable y paciente. "
+            "El estudiante acaba de completar una lección y te la adjunta para que la analices.\n\n"
+            f"=== DATOS DE LA LECCIÓN ===\n"
+            f"Idioma: {leccion_adjunta.get('idioma', '')}\n"
+            f"Nivel: {leccion_adjunta.get('nivel', '')}\n"
+            f"Tema: {leccion_adjunta.get('tema', '')}\n"
+            f"Tipo de ejercicio: {leccion_adjunta.get('tipo_ejercicio', '')}\n"
+            f"Puntuación: {leccion_adjunta.get('puntuacion', 0)}%\n"
+            f"Contenido del ejercicio:\n{leccion_adjunta.get('contenido', '')}\n"
+            f"Resultados del estudiante:\n{leccion_adjunta.get('resultado_json', '')}\n"
+            f"=== FIN DE DATOS ===\n\n"
+            f"Mensaje del estudiante: \"{mensaje}\"\n\n"
+            "Analiza los resultados, identifica errores y áreas de mejora, y da consejos claros. "
+            "Responde en español de forma clara y amigable."
+        )
     return (
-        f"Eres un tutor de idiomas amigable y paciente. El estudiante aprende {idioma} "
-        f"y tiene nivel '{nivel}'.\n\n"
+        "Eres un tutor de idiomas amigable, paciente y conversacional. "
+        "Puedes ayudar con cualquier idioma que el estudiante quiera practicar. "
+        "NO des correcciones gramaticales a menos que el estudiante te lo pida explícitamente. "
+        "Simplemente conversa de forma natural y responde sus preguntas.\n\n"
         f"Mensaje del estudiante: \"{mensaje}\"\n\n"
-        "Responde en DOS secciones usando exactamente este formato JSON (sin texto extra):\n"
-        '{\n'
-        '  "respuesta": "<tu respuesta natural al estudiante>",\n'
-        '  "correccion": "<corrección gramatical si aplica, o null si el mensaje es correcto>"\n'
-        '}'
+        "Responde de forma natural en español (o en el idioma que el estudiante use)."
     )
 
 
@@ -329,21 +741,16 @@ async def chat_local(
     current_user: Usuario = Depends(_get_current_user),
 ) -> ChatResponse:
     """
-    Send a message to the local SLM (via Ollama-compatible API).
-    Returns the tutor's reply and an optional grammar correction.
-
-    To use: run `ollama pull qwen2.5:3b` and set LOCAL_MODEL_NAME in .env.
-    Falls back to a mock response if the local model is unavailable.
+    Send a message to the local SLM (via Ollama).
+    To use: run `ollama pull qwen3:8b` and ensure Ollama is running.
     """
-    prompt = _build_chat_prompt(
-        payload.mensaje, payload.nivel_idioma, payload.idioma_objetivo
-    )
+    leccion_dict = payload.leccion_adjunta.model_dump() if payload.leccion_adjunta else None
+    prompt = _build_chat_prompt(payload.mensaje, leccion_dict)
 
     respuesta_texto = ""
-    correccion_texto = None
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 LOCAL_MODEL_URL,
                 json={
@@ -353,30 +760,18 @@ async def chat_local(
                 },
             )
         resp.raise_for_status()
-        raw = resp.json().get("response", "")
-
-        # Extract the JSON block from the model output
-        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if json_match:
-            parsed = json.loads(json_match.group())
-            respuesta_texto = parsed.get("respuesta", raw)
-            correccion_texto = parsed.get("correccion") or None
-        else:
-            respuesta_texto = raw
+        respuesta_texto = resp.json().get("response", "")
 
     except (httpx.ConnectError, httpx.HTTPStatusError):
-        # Graceful fallback when the local model is not running
         respuesta_texto = (
             "El modelo local no está disponible. "
             "Inicia Ollama con `ollama serve` y descarga el modelo con "
             f"`ollama pull {LOCAL_MODEL_NAME}`."
         )
 
-    # Persist the message
     mensaje_db = Mensaje(
         texto_usuario=payload.mensaje,
         respuesta_ia=respuesta_texto,
-        correccion_ia=correccion_texto,
         usuario_id=current_user.id,
     )
     db.add(mensaje_db)
@@ -385,7 +780,6 @@ async def chat_local(
 
     return ChatResponse(
         respuesta=respuesta_texto,
-        correccion=correccion_texto,
         mensaje_id=mensaje_db.id,
     )
 

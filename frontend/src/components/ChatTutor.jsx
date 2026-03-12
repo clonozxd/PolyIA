@@ -1,33 +1,24 @@
 /**
  * ChatTutor.jsx
  *
- * Real-time chat interface with the local SLM tutor.
- * - Sends messages to POST /api/chat/local
- * - Displays the tutor's reply and grammar corrections inline
- * - Auto-scrolls to the latest message
- * - Full dark mode support
+ * Chat interface with the local SLM tutor.
+ * - The tutor is a general conversational assistant.
+ * - Users can attach completed lesson data for the tutor to analyze.
+ * - Corrections are only given when a lesson is attached or explicitly requested.
  */
 import PropTypes from 'prop-types'
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useTheme } from '../context/ThemeContext'
 import api from '../services/api'
 
-const LANGUAGES = ['inglés', 'francés', 'alemán', 'italiano', 'portugués', 'japonés', 'chino', 'árabe']
-const LEVELS = [
-  { value: 'principiante', label: 'Principiante' },
-  { value: 'intermedio',   label: 'Intermedio' },
-  { value: 'avanzado',     label: 'Avanzado' },
-]
+/* ── Chat Bubble ──────────────────────────────────────────────────── */
 
-/** Individual chat bubble */
 function Bubble({ msg }) {
   const isUser = msg.role === 'user'
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
-      {/* Avatar */}
       {!isUser && (
         <div className="w-8 h-8 rounded-full bg-primary-600 text-white flex items-center justify-center text-sm mr-2 flex-shrink-0 mt-1">
           🤖
@@ -35,9 +26,21 @@ function Bubble({ msg }) {
       )}
 
       <div className="max-w-[80%] space-y-1">
+        {/* Attached lesson card (user bubble) */}
+        {msg.lessonAttachment && (
+          <div className="bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800 rounded-xl px-3 py-2 text-xs mb-1">
+            <div className="flex items-center gap-2 text-primary-700 dark:text-primary-300 font-semibold mb-1">
+              📎 Lección adjunta
+            </div>
+            <p className="text-primary-600 dark:text-primary-400">
+              {msg.lessonAttachment.tema} — {msg.lessonAttachment.nivel} · {msg.lessonAttachment.tipo_ejercicio?.replace('_', ' ')} · {msg.lessonAttachment.puntuacion}%
+            </p>
+          </div>
+        )}
+
         {/* Main text */}
         <div
-          className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+          className={`rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
             isUser
               ? 'bg-primary-600 text-white rounded-tr-sm'
               : 'bg-card-light dark:bg-card-dark shadow dark:shadow-black/20 text-gray-800 dark:text-gray-100 rounded-tl-sm'
@@ -45,14 +48,6 @@ function Bubble({ msg }) {
         >
           {msg.text}
         </div>
-
-        {/* Grammar correction bubble (tutor only) */}
-        {msg.correction && (
-          <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-xl px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
-            <span className="font-semibold">✏️ Corrección: </span>
-            {msg.correction}
-          </div>
-        )}
       </div>
 
       {isUser && (
@@ -68,22 +63,25 @@ Bubble.propTypes = {
   msg: PropTypes.shape({
     role: PropTypes.string.isRequired,
     text: PropTypes.string.isRequired,
-    correction: PropTypes.string,
+    lessonAttachment: PropTypes.object,
   }).isRequired,
 }
 
+/* ── ChatTutor Component ──────────────────────────────────────────── */
+
 export default function ChatTutor() {
-  const { user } = useAuth()
   const { dark, toggle } = useTheme()
   const navigate = useNavigate()
+  const location = useLocation()
 
-  const [idioma, setIdioma] = useState('inglés')
-  const [nivel, setNivel] = useState('principiante')
+  // Lesson attachment received from LessonExercise via navigation state
+  const [attachedLesson, setAttachedLesson] = useState(location.state?.lesson || null)
+
   const [messages, setMessages] = useState([
     {
       id: 'welcome',
       role: 'tutor',
-      text: `¡Hola! Soy tu tutor de ${idioma}. Puedes escribirme en ${idioma} o en español y te ayudaré a practicar y corregir tus errores. ¿Empezamos?`,
+      text: '¡Hola! Soy tu tutor de idiomas. Puedes conversar conmigo libremente o adjuntar una lección completada para que analice tus resultados y te ayude a mejorar.',
     },
   ])
   const [input, setInput] = useState('')
@@ -91,50 +89,95 @@ export default function ChatTutor() {
   const [error, setError] = useState('')
 
   const bottomRef = useRef(null)
-  const inputRef  = useRef(null)
+  const inputRef = useRef(null)
 
-  // Auto-scroll on new messages
+  // Auto-scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // Update welcome message when language changes
+  // When arriving with a lesson attachment, auto-send it
   useEffect(() => {
-    setMessages([{
-      id: 'welcome',
-      role: 'tutor',
-      text: `¡Hola! Soy tu tutor de ${idioma}. Puedes escribirme en ${idioma} o en español y te ayudaré a practicar y corregir tus errores. ¿Empezamos?`,
-    }])
-  }, [idioma])
+    if (location.state?.lesson && location.state?.autoSend) {
+      const lesson = location.state.lesson
+      setAttachedLesson(lesson)
+      // Build and send the message automatically
+      const text = `Acabo de completar esta lección con ${lesson.puntuacion ?? 0}%. ¿Puedes analizar mis resultados y explicarme en qué puedo mejorar?`
+      sendWithLesson(text, lesson)
+      // Clear location state to prevent re-sending on remount
+      window.history.replaceState({}, '')
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function sendWithLesson(text, lesson) {
+    const userMsg = {
+      id: Date.now(),
+      role: 'user',
+      text,
+      lessonAttachment: lesson,
+    }
+    setMessages((prev) => [...prev, userMsg])
+    setSending(true)
+    setError('')
+
+    try {
+      const { data } = await api.post('/api/chat/local', {
+        mensaje: text,
+        leccion_adjunta: {
+          tema: lesson.tema,
+          idioma: lesson.idioma,
+          nivel: lesson.nivel,
+          tipo_ejercicio: lesson.tipo_ejercicio,
+          tema_categoria: lesson.tema_categoria,
+          puntuacion: lesson.puntuacion,
+          contenido: lesson.contenido,
+          resultado_json: lesson.resultado_json,
+        },
+      })
+
+      setMessages((prev) => [...prev, {
+        id: data.mensaje_id ?? Date.now() + 1,
+        role: 'tutor',
+        text: data.respuesta,
+      }])
+    } catch (err) {
+      const msg = err?.response?.data?.detail || 'Error al contactar el tutor.'
+      setError(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    } finally {
+      setSending(false)
+      setAttachedLesson(null)
+      inputRef.current?.focus()
+    }
+  }
 
   async function sendMessage(e) {
     e.preventDefault()
     const text = input.trim()
     if (!text || sending) return
-
     setInput('')
-    setError('')
 
+    // If there's a lesson attached, send it along
+    if (attachedLesson) {
+      await sendWithLesson(text, attachedLesson)
+      return
+    }
+
+    setError('')
     const userMsg = { id: Date.now(), role: 'user', text }
     setMessages((prev) => [...prev, userMsg])
 
     setSending(true)
     try {
-      const { data } = await api.post('/api/chat/local', {
-        mensaje: text,
-        idioma_objetivo: idioma,
-        nivel_idioma: nivel,
-      })
+      const { data } = await api.post('/api/chat/local', { mensaje: text })
 
-      const tutorMsg = {
+      setMessages((prev) => [...prev, {
         id: data.mensaje_id ?? Date.now() + 1,
         role: 'tutor',
         text: data.respuesta,
-        correction: data.correccion || null,
-      }
-      setMessages((prev) => [...prev, tutorMsg])
+      }])
     } catch (err) {
-      const msg = err?.response?.data?.detail || 'Error al contactar el tutor. Verifica que el servidor esté activo.'
+      const msg = err?.response?.data?.detail || 'Error al contactar el tutor. Verifica que Ollama esté activo.'
       setError(typeof msg === 'string' ? msg : JSON.stringify(msg))
       setMessages((prev) => prev.filter((m) => m.id !== userMsg.id))
       setInput(text)
@@ -142,6 +185,10 @@ export default function ChatTutor() {
       setSending(false)
       inputRef.current?.focus()
     }
+  }
+
+  function removeAttachment() {
+    setAttachedLesson(null)
   }
 
   return (
@@ -160,38 +207,16 @@ export default function ChatTutor() {
             <img src="/logo.jpg" alt="PolyIA" className="w-8 h-8 rounded-full object-cover" />
             <div>
               <h1 className="text-lg font-bold text-primary-600 dark:text-primary-400">Chat Tutor</h1>
-              <p className="text-xs text-gray-400 dark:text-gray-500">Modelo local · corrección en tiempo real</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500">Modelo local · adjunta lecciones para análisis</p>
             </div>
           </div>
-
-          {/* Language, Level pickers & dark mode */}
-          <div className="flex items-center gap-2">
-            <select
-              className="text-xs border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 dark:text-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary-400"
-              value={idioma}
-              onChange={(e) => setIdioma(e.target.value)}
-            >
-              {LANGUAGES.map((l) => (
-                <option key={l} value={l}>{l.charAt(0).toUpperCase() + l.slice(1)}</option>
-              ))}
-            </select>
-            <select
-              className="text-xs border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 dark:text-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary-400"
-              value={nivel}
-              onChange={(e) => setNivel(e.target.value)}
-            >
-              {LEVELS.map((l) => (
-                <option key={l.value} value={l.value}>{l.label}</option>
-              ))}
-            </select>
-            <button
-              onClick={toggle}
-              className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-              aria-label="Cambiar tema"
-            >
-              {dark ? '☀️' : '🌙'}
-            </button>
-          </div>
+          <button
+            onClick={toggle}
+            className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            aria-label="Cambiar tema"
+          >
+            {dark ? '☀️' : '🌙'}
+          </button>
         </div>
       </header>
 
@@ -201,7 +226,6 @@ export default function ChatTutor() {
           <Bubble key={msg.id} msg={msg} />
         ))}
 
-        {/* Sending indicator */}
         {sending && (
           <div className="flex justify-start mb-3">
             <div className="w-8 h-8 rounded-full bg-primary-600 text-white flex items-center justify-center text-sm mr-2">
@@ -215,7 +239,6 @@ export default function ChatTutor() {
           </div>
         )}
 
-        {/* Error banner */}
         {error && (
           <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm rounded-xl px-4 py-3 mb-3">
             {error}
@@ -227,6 +250,25 @@ export default function ChatTutor() {
 
       {/* ── Input area ── */}
       <footer className="bg-card-light dark:bg-card-dark border-t border-gray-200 dark:border-gray-700 sticky bottom-0 transition-colors duration-300">
+        {/* Attached lesson preview */}
+        {attachedLesson && (
+          <div className="max-w-3xl mx-auto px-4 pt-3">
+            <div className="flex items-center gap-2 bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800 rounded-xl px-3 py-2 text-sm">
+              <span className="text-primary-600 dark:text-primary-400">📎</span>
+              <span className="flex-1 text-primary-700 dark:text-primary-300 truncate text-xs">
+                {attachedLesson.tema} — {attachedLesson.puntuacion ?? 0}%
+              </span>
+              <button
+                onClick={removeAttachment}
+                className="text-gray-400 hover:text-red-500 transition-colors text-xs"
+                aria-label="Quitar adjunto"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
         <form
           onSubmit={sendMessage}
           className="max-w-3xl mx-auto px-4 py-3 flex items-end gap-3"
@@ -235,7 +277,7 @@ export default function ChatTutor() {
             ref={inputRef}
             rows={1}
             className="input flex-1 resize-none overflow-hidden leading-relaxed"
-            placeholder={`Escribe en ${idioma} o en español…`}
+            placeholder={attachedLesson ? 'Escribe tu pregunta sobre la lección adjunta…' : 'Escribe un mensaje…'}
             value={input}
             onChange={(e) => {
               setInput(e.target.value)
