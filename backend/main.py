@@ -15,19 +15,21 @@ POST /api/tts                      – Generate audio from text using edge-tts
 POST /api/chat/local               – Chat with the local SLM tutor + grammar correction
 """
 
+import hashlib
 import io
 import json
 import os
 import random
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Annotated
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -330,6 +332,29 @@ def _build_exercise_prompt(
             '}\n'
             "```\n"
             "respuesta_correcta es el índice (0-3) de la opción correcta."
+        ) if tema_cat != "comprension_auditiva" else (
+            "El ejercicio es de COMPRENSIÓN AUDITIVA con opción múltiple. "
+            "El usuario ESCUCHARÁ un audio (generado automáticamente) y deberá responder una pregunta sobre lo que escuchó.\n"
+            "IMPORTANTE: El campo 'audio_texto' contiene la frase que se convertirá en audio. NO la muestres en 'pregunta'.\n"
+            "El campo 'pregunta' debe ser SOLO la pregunta sobre el audio (ej: '¿Qué dice la persona?', '¿A dónde va?').\n\n"
+            "Genera exactamente este JSON (6-8 preguntas):\n"
+            "```json\n"
+            '{\n'
+            '  "instrucciones": "Escucha el audio y selecciona la respuesta correcta.",\n'
+            '  "preguntas": [\n'
+            '    {\n'
+            '      "audio_texto": "The train arrives at six p.m.",\n'
+            '      "pregunta": "¿A qué hora llega el tren?",\n'
+            '      "opciones": ["6:00 a.m.", "7:00 p.m.", "6:00 p.m.", "12:00 p.m."],\n'
+            '      "respuesta_correcta": 2,\n'
+            '      "explicacion": "...\'six p.m.\' = 6:00 p.m."\n'
+            '    }\n'
+            '  ]\n'
+            '}\n'
+            "```\n"
+            "respuesta_correcta es el índice (0-3) de la opción correcta.\n"
+            "audio_texto debe ser una frase COMPLETA en el idioma objetivo, apropiada para el nivel.\n"
+            "pregunta debe estar en español y NO revelar el contenido del audio."
         ),
         "categorization": (
             "El ejercicio es de CATEGORIZACIÓN. El usuario clasifica palabras arrastrándolas a categorías.\n"
@@ -355,6 +380,25 @@ def _build_exercise_prompt(
             '  "instrucciones": "...",\n'
             '  "ejercicios": [\n'
             '    {\n'
+            '      "oracion": "They _____ to the cinema yesterday",\n'
+            '      "respuesta": "went",\n'
+            '      "pista": "Past tense of go"\n'
+            '    }\n'
+            '  ]\n'
+            '}\n'
+            "```"
+        ) if tema_cat != "comprension_auditiva" else (
+            "El ejercicio es de COMPRENSIÓN AUDITIVA con completar huecos. "
+            "El usuario ESCUCHARÁ un audio y deberá completar la palabra faltante.\n"
+            "IMPORTANTE: 'audio_texto' es la frase COMPLETA que se convertirá en audio.\n"
+            "'oracion' es la misma frase pero con _____ en la palabra que falta.\n\n"
+            "Genera exactamente este JSON (6-8 ejercicios):\n"
+            "```json\n"
+            '{\n'
+            '  "instrucciones": "Escucha el audio y completa la palabra que falta.",\n'
+            '  "ejercicios": [\n'
+            '    {\n'
+            '      "audio_texto": "They went to the cinema yesterday",\n'
             '      "oracion": "They _____ to the cinema yesterday",\n'
             '      "respuesta": "went",\n'
             '      "pista": "Past tense of go"\n'
@@ -498,6 +542,13 @@ async def generar_leccion(
             contenido = raw_content
     else:
         contenido = raw_content
+
+    # For comprension_auditiva: generate and cache TTS audio files
+    if payload.tema_categoria == "comprension_auditiva":
+        try:
+            contenido = await _postprocess_audio(contenido, payload.idioma, tipo)
+        except Exception:
+            pass  # If audio generation fails, keep the lesson without audio
 
     tema_display = TEMA_DISPLAY.get(payload.tema_categoria, payload.tema_categoria)
     tipo_display = TIPO_DISPLAY.get(tipo, tipo)
@@ -665,10 +716,75 @@ def obtener_todo_progreso(
 
 TTS_VOICES: dict[str, str] = {
     "espanol": "es-MX-DaliaNeural",
-    "ingles": "en-US-JennyNeural",
+    "ingles": "en-US-AriaNeural",
     "japones": "ja-JP-NanamiNeural",
     "aleman": "de-DE-KatjaNeural",
 }
+
+# ---------------------------------------------------------------------------
+# Audio cache for listening exercises
+# ---------------------------------------------------------------------------
+
+AUDIO_CACHE_DIR = Path(__file__).parent / "audio_cache"
+AUDIO_CACHE_DIR.mkdir(exist_ok=True)
+
+
+async def _generate_cached_audio(text: str, idioma: str) -> str:
+    """Generate TTS audio and cache it. Returns the filename."""
+    import edge_tts
+
+    voice = TTS_VOICES.get(idioma, TTS_VOICES["ingles"])
+    text_hash = hashlib.sha256(f"{text}:{voice}".encode()).hexdigest()[:16]
+    filename = f"{text_hash}.mp3"
+    filepath = AUDIO_CACHE_DIR / filename
+
+    if filepath.exists():
+        return filename
+
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save(str(filepath))
+    return filename
+
+
+async def _postprocess_audio(contenido_json: str, idioma: str, tipo: str) -> str:
+    """For comprension_auditiva lessons, generate audio files and inject URLs."""
+    try:
+        data = json.loads(contenido_json)
+    except json.JSONDecodeError:
+        return contenido_json
+
+    if tipo == "multiple_choice":
+        for pregunta in data.get("preguntas", []):
+            audio_text = pregunta.get("audio_texto", "")
+            if audio_text:
+                fname = await _generate_cached_audio(audio_text, idioma)
+                pregunta["audio_url"] = f"/api/audio/{fname}"
+    elif tipo == "dictation":
+        for ej in data.get("ejercicios", []):
+            audio_text = ej.get("texto", "")
+            if audio_text:
+                fname = await _generate_cached_audio(audio_text, idioma)
+                ej["audio_url"] = f"/api/audio/{fname}"
+    elif tipo == "fill_blank":
+        for ej in data.get("ejercicios", []):
+            audio_text = ej.get("audio_texto", "")
+            if audio_text:
+                fname = await _generate_cached_audio(audio_text, idioma)
+                ej["audio_url"] = f"/api/audio/{fname}"
+
+    return json.dumps(data, ensure_ascii=False)
+
+
+@app.get("/api/audio/{filename}")
+def serve_audio(filename: str):
+    """Serve a cached TTS audio file."""
+    # Sanitize: only allow alphanumeric + dot + dash
+    if not re.match(r"^[a-f0-9]+\.mp3$", filename):
+        raise HTTPException(400, "Nombre de archivo inválido.")
+    filepath = AUDIO_CACHE_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(404, "Audio no encontrado.")
+    return FileResponse(filepath, media_type="audio/mpeg")
 
 
 @app.post("/api/tts")

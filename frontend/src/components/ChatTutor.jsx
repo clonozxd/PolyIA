@@ -7,7 +7,7 @@
  * - Corrections are only given when a lesson is attached or explicitly requested.
  */
 import PropTypes from 'prop-types'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useTheme } from '../context/ThemeContext'
 import api from '../services/api'
@@ -96,12 +96,16 @@ export default function ChatTutor() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Guard against React StrictMode double-firing
+  const autoSentRef = useRef(false)
+
   // When arriving with a lesson attachment, auto-send it
   useEffect(() => {
+    if (autoSentRef.current) return
     if (location.state?.lesson && location.state?.autoSend) {
+      autoSentRef.current = true
       const lesson = location.state.lesson
       setAttachedLesson(lesson)
-      // Build and send the message automatically
       const text = `Acabo de completar esta lección con ${lesson.puntuacion ?? 0}%. ¿Puedes analizar mis resultados y explicarme en qué puedo mejorar?`
       sendWithLesson(text, lesson)
       // Clear location state to prevent re-sending on remount
@@ -142,8 +146,11 @@ export default function ChatTutor() {
         text: data.respuesta,
       }])
     } catch (err) {
-      const msg = err?.response?.data?.detail || 'Error al contactar el tutor.'
-      setError(typeof msg === 'string' ? msg : JSON.stringify(msg))
+      const status = err?.response?.status || ''
+      const detail = err?.response?.data?.detail
+      const raw = detail ? (typeof detail === 'string' ? detail : JSON.stringify(detail)) : (err?.message || 'Error desconocido')
+      const msg = status ? `[${status}] ${raw}` : raw
+      setError(msg)
     } finally {
       setSending(false)
       setAttachedLesson(null)
@@ -177,8 +184,11 @@ export default function ChatTutor() {
         text: data.respuesta,
       }])
     } catch (err) {
-      const msg = err?.response?.data?.detail || 'Error al contactar el tutor. Verifica que Ollama esté activo.'
-      setError(typeof msg === 'string' ? msg : JSON.stringify(msg))
+      const status = err?.response?.status || ''
+      const detail = err?.response?.data?.detail
+      const raw = detail ? (typeof detail === 'string' ? detail : JSON.stringify(detail)) : (err?.message || 'Error al contactar el tutor. Verifica que Ollama esté activo.')
+      const msg = status ? `[${status}] ${raw}` : raw
+      setError(msg)
       setMessages((prev) => prev.filter((m) => m.id !== userMsg.id))
       setInput(text)
     } finally {

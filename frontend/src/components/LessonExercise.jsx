@@ -57,6 +57,74 @@ function useAudioPlayer() {
   return { play, playing }
 }
 
+/* ── Reusable Audio Button ─────────────────────────────────────────── */
+
+function AudioButton({ audioUrl, text, idioma, size = 'normal' }) {
+  const [state, setState] = useState('idle') // idle | loading | playing
+  const audioRef = useRef(null)
+  const { play: fallbackPlay, playing: fallbackPlaying } = useAudioPlayer()
+
+  async function handlePlay() {
+    if (state === 'loading' || state === 'playing') return
+    setState('loading')
+    try {
+      if (audioUrl) {
+        // Use pre-cached audio from server
+        if (audioRef.current) { audioRef.current.pause(); audioRef.current = null }
+        const audio = new Audio(audioUrl)
+        audioRef.current = audio
+        audio.onended = () => setState('idle')
+        audio.onerror = () => {
+          // Fallback to on-demand TTS if cached file fails
+          if (text && idioma) {
+            fallbackPlay(text, idioma)
+          }
+          setState('idle')
+        }
+        audio.oncanplaythrough = () => {
+          setState('playing')
+          audio.play().catch(() => setState('idle'))
+        }
+        audio.load()
+      } else if (text && idioma) {
+        // On-demand TTS fallback
+        setState('playing')
+        await fallbackPlay(text, idioma)
+        setState('idle')
+      } else {
+        setState('idle')
+      }
+    } catch {
+      setState('idle')
+    }
+  }
+
+  // Sync fallback player state
+  useEffect(() => {
+    if (!fallbackPlaying && state === 'playing' && !audioRef.current) {
+      setState('idle')
+    }
+  }, [fallbackPlaying, state])
+
+  const isLarge = size === 'large'
+  const icon = state === 'loading' ? '⏳' : state === 'playing' ? '⏸️' : '🔊'
+
+  return (
+    <button
+      onClick={handlePlay}
+      disabled={state === 'loading'}
+      className={`flex items-center gap-2 rounded-xl font-medium transition-all mb-3 ${
+        isLarge
+          ? 'w-full justify-center py-4 text-lg bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50'
+          : 'px-4 py-2 text-sm bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400 hover:bg-primary-100 dark:hover:bg-primary-900/40'
+      }`}
+    >
+      <span className={isLarge ? 'text-2xl' : 'text-base'}>{icon}</span>
+      <span>{state === 'loading' ? 'Cargando…' : state === 'playing' ? 'Reproduciendo…' : 'Escuchar audio'}</span>
+    </button>
+  )
+}
+
 /* ── Matching Exercise ────────────────────────────────────────────── */
 
 function MatchingExercise({ data, onComplete }) {
@@ -219,7 +287,7 @@ function SyntaxSortingExercise({ data, onComplete }) {
 
 /* ── Multiple Choice Exercise ─────────────────────────────────────── */
 
-function MultipleChoiceExercise({ data, onComplete }) {
+function MultipleChoiceExercise({ data, onComplete, idioma }) {
   const preguntas = data.preguntas || []
   const [current, setCurrent] = useState(0)
   const [selected, setSelected] = useState(null)
@@ -247,11 +315,22 @@ function MultipleChoiceExercise({ data, onComplete }) {
 
   if (!preguntas[current]) return null
   const q = preguntas[current]
+  const hasAudio = !!q.audio_url || !!q.audio_texto
 
   return (
     <div>
       <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{data.instrucciones}</p>
       <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">Pregunta {current + 1} de {preguntas.length}</p>
+
+      {/* Audio player for listening exercises */}
+      {hasAudio && (
+        <AudioButton
+          audioUrl={q.audio_url}
+          text={q.audio_texto}
+          idioma={idioma}
+          size="large"
+        />
+      )}
 
       <p className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">{q.pregunta}</p>
 
@@ -349,7 +428,7 @@ function CategorizationExercise({ data, onComplete }) {
 
 /* ── Fill in the Blank Exercise ───────────────────────────────────── */
 
-function FillBlankExercise({ data, onComplete }) {
+function FillBlankExercise({ data, onComplete, idioma }) {
   const ejercicios = data.ejercicios || []
   const [current, setCurrent] = useState(0)
   const [answer, setAnswer] = useState('')
@@ -378,11 +457,21 @@ function FillBlankExercise({ data, onComplete }) {
 
   if (!ejercicios[current]) return null
   const ex = ejercicios[current]
+  const hasAudio = !!ex.audio_url || !!ex.audio_texto
 
   return (
     <div>
       <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{data.instrucciones}</p>
       <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">Ejercicio {current + 1} de {ejercicios.length}</p>
+
+      {hasAudio && (
+        <AudioButton
+          audioUrl={ex.audio_url}
+          text={ex.audio_texto}
+          idioma={idioma}
+          size="large"
+        />
+      )}
 
       <p className="text-lg font-medium text-gray-800 dark:text-gray-100 mb-2">{ex.oracion}</p>
       {ex.pista && <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">💡 Pista: {ex.pista}</p>}
@@ -500,13 +589,6 @@ function DictationExercise({ data, idioma, onComplete }) {
   const [showResult, setShowResult] = useState(false)
   const [isCorrect, setIsCorrect] = useState(false)
   const [results, setResults] = useState([])
-  const { play, playing } = useAudioPlayer()
-
-  function playAudio() {
-    if (ejercicios[current]) {
-      play(ejercicios[current].texto, idioma)
-    }
-  }
 
   function check() {
     const correct = normalize(answer) === normalize(ejercicios[current].texto)
@@ -528,22 +610,19 @@ function DictationExercise({ data, idioma, onComplete }) {
   }
 
   if (!ejercicios[current]) return null
+  const ex = ejercicios[current]
 
   return (
     <div>
       <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{data.instrucciones}</p>
       <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">Ejercicio {current + 1} de {ejercicios.length}</p>
 
-      <button
-        onClick={playAudio}
-        disabled={playing}
-        className="w-full py-6 mb-4 bg-primary-50 dark:bg-primary-900/30 rounded-xl text-center hover:bg-primary-100 dark:hover:bg-primary-800/30 transition-colors"
-      >
-        <span className="text-4xl">{playing ? '🔊' : '🔈'}</span>
-        <p className="text-sm text-primary-600 dark:text-primary-400 mt-2">
-          {playing ? 'Reproduciendo…' : 'Toca para escuchar'}
-        </p>
-      </button>
+      <AudioButton
+        audioUrl={ex.audio_url}
+        text={ex.texto}
+        idioma={idioma}
+        size="large"
+      />
 
       <input
         type="text"
@@ -561,9 +640,9 @@ function DictationExercise({ data, idioma, onComplete }) {
             ? 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400'
             : 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400'
         }`}>
-          {isCorrect ? '✅ ¡Correcto!' : `❌ El texto era: "${ejercicios[current].texto}"`}
-          {ejercicios[current].traduccion && (
-            <p className="text-xs mt-1 opacity-75">Traducción: {ejercicios[current].traduccion}</p>
+          {isCorrect ? '✅ ¡Correcto!' : `❌ El texto era: "${ex.texto}"`}
+          {ex.traduccion && (
+            <p className="text-xs mt-1 opacity-75">Traducción: {ex.traduccion}</p>
           )}
         </div>
       )}
@@ -782,13 +861,13 @@ export default function LessonExercise() {
               <SyntaxSortingExercise data={exerciseData} onComplete={handleComplete} />
             )}
             {lesson.tipo_ejercicio === 'multiple_choice' && (
-              <MultipleChoiceExercise data={exerciseData} onComplete={handleComplete} />
+              <MultipleChoiceExercise data={exerciseData} onComplete={handleComplete} idioma={lesson.idioma} />
             )}
             {lesson.tipo_ejercicio === 'categorization' && (
               <CategorizationExercise data={exerciseData} onComplete={handleComplete} />
             )}
             {lesson.tipo_ejercicio === 'fill_blank' && (
-              <FillBlankExercise data={exerciseData} onComplete={handleComplete} />
+              <FillBlankExercise data={exerciseData} onComplete={handleComplete} idioma={lesson.idioma} />
             )}
             {lesson.tipo_ejercicio === 'translation' && (
               <TranslationExercise data={exerciseData} onComplete={handleComplete} />
