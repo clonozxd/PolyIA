@@ -31,80 +31,88 @@ function normalize(s) {
   return (s || '').trim().toLowerCase().replace(/[.,!?;:'"¿¡]/g, '')
 }
 
-/* ── TTS helper ───────────────────────────────────────────────────── */
-
-function useAudioPlayer() {
-  const [playing, setPlaying] = useState(false)
-  const audioRef = useRef(null)
-
-  const play = useCallback(async (texto, idioma) => {
-    if (playing) return
-    setPlaying(true)
-    try {
-      const resp = await api.post('/api/tts', { texto, idioma }, { responseType: 'blob' })
-      const url = URL.createObjectURL(resp.data)
-      if (audioRef.current) audioRef.current.pause()
-      const audio = new Audio(url)
-      audioRef.current = audio
-      audio.onended = () => { setPlaying(false); URL.revokeObjectURL(url) }
-      audio.onerror = () => { setPlaying(false); URL.revokeObjectURL(url) }
-      await audio.play()
-    } catch {
-      setPlaying(false)
-    }
-  }, [playing])
-
-  return { play, playing }
-}
-
 /* ── Reusable Audio Button ─────────────────────────────────────────── */
 
 function AudioButton({ audioUrl, text, idioma, size = 'normal' }) {
   const [state, setState] = useState('idle') // idle | loading | playing
   const audioRef = useRef(null)
-  const { play: fallbackPlay, playing: fallbackPlaying } = useAudioPlayer()
+
+  function cleanup() {
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.onended = null
+      audioRef.current.onerror = null
+      if (audioRef.current._blobUrl) {
+        URL.revokeObjectURL(audioRef.current._blobUrl)
+      }
+      audioRef.current = null
+    }
+  }
+
+  async function playFromBlob(blob) {
+    cleanup()
+    const blobUrl = URL.createObjectURL(blob)
+    const audio = new Audio(blobUrl)
+    audio._blobUrl = blobUrl
+    audioRef.current = audio
+
+    return new Promise((resolve) => {
+      audio.onended = () => { setState('idle'); cleanup(); resolve() }
+      audio.onerror = () => { setState('idle'); cleanup(); resolve() }
+      audio.oncanplaythrough = () => {
+        setState('playing')
+        audio.play().catch(() => { setState('idle'); cleanup(); resolve() })
+      }
+      audio.load()
+    })
+  }
+
+  async function playFromUrl(url) {
+    cleanup()
+    const audio = new Audio(url)
+    audioRef.current = audio
+
+    return new Promise((resolve, reject) => {
+      audio.onended = () => { setState('idle'); cleanup(); resolve() }
+      audio.onerror = () => { cleanup(); reject(new Error('cached audio failed')) }
+      audio.oncanplaythrough = () => {
+        setState('playing')
+        audio.play().catch(() => { setState('idle'); cleanup(); resolve() })
+      }
+      audio.load()
+    })
+  }
 
   async function handlePlay() {
     if (state === 'loading' || state === 'playing') return
     setState('loading')
     try {
+      // Strategy 1: Try pre-cached audio URL from the server
       if (audioUrl) {
-        // Use pre-cached audio from server
-        if (audioRef.current) { audioRef.current.pause(); audioRef.current = null }
-        const audio = new Audio(audioUrl)
-        audioRef.current = audio
-        audio.onended = () => setState('idle')
-        audio.onerror = () => {
-          // Fallback to on-demand TTS if cached file fails
-          if (text && idioma) {
-            fallbackPlay(text, idioma)
-          }
-          setState('idle')
+        try {
+          await playFromUrl(audioUrl)
+          return
+        } catch {
+          // Pre-cached audio failed, fall through to on-demand TTS
         }
-        audio.oncanplaythrough = () => {
-          setState('playing')
-          audio.play().catch(() => setState('idle'))
-        }
-        audio.load()
-      } else if (text && idioma) {
-        // On-demand TTS fallback
-        setState('playing')
-        await fallbackPlay(text, idioma)
-        setState('idle')
-      } else {
-        setState('idle')
       }
+
+      // Strategy 2: On-demand TTS via /api/tts
+      if (text && idioma) {
+        const resp = await api.post('/api/tts', { texto: text, idioma }, { responseType: 'blob' })
+        await playFromBlob(resp.data)
+        return
+      }
+
+      // No audio source available
+      setState('idle')
     } catch {
       setState('idle')
     }
   }
 
-  // Sync fallback player state
-  useEffect(() => {
-    if (!fallbackPlaying && state === 'playing' && !audioRef.current) {
-      setState('idle')
-    }
-  }, [fallbackPlaying, state])
+  // Cleanup on unmount
+  useEffect(() => cleanup, [])
 
   const isLarge = size === 'large'
   const icon = state === 'loading' ? '⏳' : state === 'playing' ? '⏸️' : '🔊'
