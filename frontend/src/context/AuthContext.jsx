@@ -61,6 +61,15 @@ export function AuthProvider({ children }) {
     setUser(null)
   }, [])
 
+  /** Update user data in context + localStorage after profile changes */
+  const updateUser = useCallback((newData) => {
+    setUser((prev) => {
+      const updated = { ...prev, ...newData }
+      localStorage.setItem('polyia_user', JSON.stringify(updated))
+      return updated
+    })
+  }, [])
+
   // Restore header on mount if token exists
   useEffect(() => {
     if (token) {
@@ -69,8 +78,8 @@ export function AuthProvider({ children }) {
   }, [token])
 
   const value = useMemo(
-    () => ({ token, user, login, register, logout, isAuthenticated: !!token }),
-    [token, user, login, register, logout]
+    () => ({ token, user, login, register, logout, updateUser, isAuthenticated: !!token }),
+    [token, user, login, register, logout, updateUser]
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

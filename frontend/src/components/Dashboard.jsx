@@ -14,6 +14,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import api from '../services/api'
+import ProfileModal from './ProfileModal'
 
 /* ── Language / Level / Topic constants ────────────────────────────── */
 
@@ -66,7 +67,11 @@ export default function Dashboard() {
   const [lessons, setLessons] = useState([])
   const [loadingLessons, setLoadingLessons] = useState(true)
 
+  // Profile modal
+  const [showProfile, setShowProfile] = useState(false)
+
   const displayName = user?.nombre || user?.email?.split('@')[0] || 'Usuario'
+  const initials = displayName.charAt(0).toUpperCase()
 
   /** Fetch progress for the selected language */
   const fetchProgress = useCallback(async (lang) => {
@@ -139,7 +144,20 @@ export default function Dashboard() {
             <h1 className="text-xl font-bold text-primary-600 dark:text-primary-400">PolyIA</h1>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-600 dark:text-gray-300 hidden sm:block">{displayName}</span>
+            <button
+              onClick={() => setShowProfile(true)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              title="Editar perfil"
+            >
+              {user?.foto_perfil ? (
+                <img src={user.foto_perfil} alt="" className="w-7 h-7 rounded-full object-cover" />
+              ) : (
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center">
+                  <span className="text-xs font-bold text-white">{initials}</span>
+                </div>
+              )}
+              <span className="text-sm text-gray-600 dark:text-gray-300 hidden sm:block">{displayName}</span>
+            </button>
             <button onClick={toggle} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" aria-label="Cambiar tema">
               {dark ? '☀️' : '🌙'}
             </button>
@@ -149,6 +167,9 @@ export default function Dashboard() {
           </div>
         </div>
       </header>
+
+      {/* Profile Modal */}
+      {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
 
       <main className="max-w-6xl mx-auto px-4 py-8 space-y-8">
         {/* ── Welcome ── */}

@@ -40,6 +40,9 @@ class Usuario(Base):
     nombre: Mapped[str] = mapped_column(
         String(100), nullable=False, default=""
     )
+    foto_perfil: Mapped[str | None] = mapped_column(
+        Text, nullable=True, default=None
+    )
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     nivel_idioma: Mapped[str] = mapped_column(
         String(50), nullable=False, default="principiante"
