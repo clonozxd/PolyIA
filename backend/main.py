@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 from database import Base, engine, get_db
 from models import Leccion, Mensaje, ProgresoNivel, Usuario
 from schemas import (
+    ChangePasswordRequest,
     ChatRequest,
     ChatResponse,
     CompletarLeccionRequest,
@@ -54,6 +55,7 @@ from schemas import (
     TIPOS_EJERCICIO,
     TokenResponse,
     TTSRequest,
+    UpdateProfileRequest,
 )
 
 load_dotenv()
@@ -263,7 +265,51 @@ def me(current_user: Usuario = Depends(_get_current_user)):
         "id": current_user.id,
         "email": current_user.email,
         "nombre": current_user.nombre,
+        "foto_perfil": current_user.foto_perfil,
     }
+
+
+@app.put("/api/auth/profile")
+def update_profile(
+    payload: UpdateProfileRequest,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(_get_current_user),
+):
+    """Update the user's display name and/or profile picture."""
+    if payload.nombre is not None:
+        current_user.nombre = payload.nombre.strip()
+    if payload.foto_perfil is not None:
+        current_user.foto_perfil = payload.foto_perfil
+    db.commit()
+    db.refresh(current_user)
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "nombre": current_user.nombre,
+        "foto_perfil": current_user.foto_perfil,
+    }
+
+
+@app.put("/api/auth/password")
+def change_password(
+    payload: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(_get_current_user),
+):
+    """Change the user's password. Requires current password + confirmation."""
+    if not _verify_password(payload.password_actual, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La contraseña actual es incorrecta.",
+        )
+    if payload.password_nueva != payload.password_confirmacion:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La nueva contraseña y la confirmación no coinciden.",
+        )
+    current_user.hashed_password = _hash_password(payload.password_nueva)
+    db.commit()
+    return {"message": "Contraseña actualizada correctamente."}
 
 
 # ---------------------------------------------------------------------------

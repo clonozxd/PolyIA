@@ -107,6 +107,17 @@ class TTSRequest(BaseModel):
     idioma: str = Field(default="ingles")
 
 
+class UpdateProfileRequest(BaseModel):
+    nombre: str | None = Field(default=None, max_length=100)
+    foto_perfil: str | None = Field(default=None, max_length=500_000)  # base64 data-URL
+
+
+class ChangePasswordRequest(BaseModel):
+    password_actual: str = Field(min_length=1)
+    password_nueva: str = Field(min_length=6)
+    password_confirmacion: str = Field(min_length=6)
+
+
 # ---------------------------------------------------------------------------
 # Chat
 # ---------------------------------------------------------------------------
