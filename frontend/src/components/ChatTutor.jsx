@@ -2,9 +2,11 @@
  * ChatTutor.jsx
  *
  * Chat interface with the local SLM tutor.
- * - The tutor is a general conversational assistant.
- * - Users can attach completed lesson data for the tutor to analyze.
- * - Corrections are only given when a lesson is attached or explicitly requested.
+ * Features:
+ *   - Persistent conversations (max 5, stored on backend)
+ *   - Sidebar with conversation list + create/delete
+ *   - In-chat lesson picker (📎 button) to attach lessons for analysis
+ *   - Conversation history sent to LLM as context
  */
 import PropTypes from 'prop-types'
 import { useEffect, useRef, useState, useCallback } from 'react'
@@ -67,6 +69,63 @@ Bubble.propTypes = {
   }).isRequired,
 }
 
+/* ── Lesson Picker Dropdown ───────────────────────────────────────── */
+
+function LessonPicker({ onSelect, onClose }) {
+  const [lessons, setLessons] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    api.get('/api/leccion/lista').then(({ data }) => {
+      setLessons(data)
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }, [])
+
+  return (
+    <div className="absolute bottom-full left-0 mb-2 w-80 max-h-64 overflow-y-auto bg-card-light dark:bg-card-dark border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl z-20">
+      <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+        <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">📎 Adjuntar lección</span>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xs">✕</button>
+      </div>
+      {loading ? (
+        <p className="text-center text-gray-400 text-xs py-4">Cargando…</p>
+      ) : lessons.length === 0 ? (
+        <p className="text-center text-gray-400 text-xs py-4">No tienes lecciones aún.</p>
+      ) : (
+        <div className="p-1">
+          {lessons.map((l) => (
+            <button
+              key={l.id}
+              onClick={() => onSelect(l)}
+              className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-gray-800 dark:text-gray-100 truncate flex-1">{l.tema}</span>
+                <span className={`text-xs px-1.5 py-0.5 rounded-full ml-2 ${
+                  l.completada
+                    ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                    : 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
+                }`}>
+                  {l.completada ? `${l.puntuacion}%` : '⏳'}
+                </span>
+              </div>
+              <p className="text-[10px] text-gray-400 mt-0.5">
+                {l.nivel} · {l.tipo_ejercicio?.replace('_', ' ')} · {l.idioma}
+              </p>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+LessonPicker.propTypes = {
+  onSelect: PropTypes.func.isRequired,
+  onClose: PropTypes.func.isRequired,
+}
+
 /* ── ChatTutor Component ──────────────────────────────────────────── */
 
 export default function ChatTutor() {
@@ -74,30 +133,107 @@ export default function ChatTutor() {
   const navigate = useNavigate()
   const location = useLocation()
 
-  // Lesson attachment received from LessonExercise via navigation state
-  const [attachedLesson, setAttachedLesson] = useState(location.state?.lesson || null)
+  // Conversations
+  const [conversations, setConversations] = useState([])
+  const [activeConvId, setActiveConvId] = useState(null)
+  const [loadingConvs, setLoadingConvs] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
-  const [messages, setMessages] = useState([
-    {
-      id: 'welcome',
-      role: 'tutor',
-      text: '¡Hola! Soy tu tutor de idiomas. Puedes conversar conmigo libremente o adjuntar una lección completada para que analice tus resultados y te ayude a mejorar.',
-    },
-  ])
+  // Messages
+  const [messages, setMessages] = useState([])
+  const [loadingMsgs, setLoadingMsgs] = useState(false)
+
+  // Lesson attachment
+  const [attachedLesson, setAttachedLesson] = useState(location.state?.lesson || null)
+  const [showLessonPicker, setShowLessonPicker] = useState(false)
+
+  // Input
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
 
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
+  const autoSentRef = useRef(false)
 
   // Auto-scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // Guard against React StrictMode double-firing
-  const autoSentRef = useRef(false)
+  // Load conversations on mount
+  const fetchConversations = useCallback(async () => {
+    try {
+      const { data } = await api.get('/api/chat/conversaciones')
+      setConversations(data)
+      return data
+    } catch {
+      return []
+    } finally {
+      setLoadingConvs(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchConversations().then((convos) => {
+      // Auto-select first conversation if exists and no lesson to auto-send
+      if (convos.length > 0 && !location.state?.lesson) {
+        loadConversation(convos[0].id)
+      }
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Load messages for a conversation
+  async function loadConversation(convId) {
+    setActiveConvId(convId)
+    setLoadingMsgs(true)
+    setMessages([])
+    try {
+      const { data } = await api.get(`/api/chat/conversacion/${convId}`)
+      const msgs = []
+      for (const m of data) {
+        msgs.push({ id: `u-${m.id}`, role: 'user', text: m.texto_usuario })
+        if (m.respuesta_ia) {
+          msgs.push({ id: `a-${m.id}`, role: 'tutor', text: m.respuesta_ia })
+        }
+      }
+      setMessages(msgs)
+    } catch {
+      setMessages([])
+    } finally {
+      setLoadingMsgs(false)
+      setSidebarOpen(false)
+    }
+  }
+
+  // Create new conversation
+  async function handleNewConversation() {
+    try {
+      const { data } = await api.post('/api/chat/conversacion')
+      setConversations((prev) => [data, ...prev].slice(0, 5))
+      setActiveConvId(data.id)
+      setMessages([])
+      setSidebarOpen(false)
+    } catch {
+      // ignore
+    }
+  }
+
+  // Delete conversation
+  async function handleDeleteConversation(convId, e) {
+    e.stopPropagation()
+    try {
+      await api.delete(`/api/chat/conversacion/${convId}`)
+      setConversations((prev) => prev.filter((c) => c.id !== convId))
+      if (activeConvId === convId) {
+        setActiveConvId(null)
+        setMessages([])
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   // When arriving with a lesson attachment, auto-send it
   useEffect(() => {
@@ -108,7 +244,6 @@ export default function ChatTutor() {
       setAttachedLesson(lesson)
       const text = `Acabo de completar esta lección con ${lesson.puntuacion ?? 0}%. ¿Puedes analizar mis resultados y explicarme en qué puedo mejorar?`
       sendWithLesson(text, lesson)
-      // Clear location state to prevent re-sending on remount
       window.history.replaceState({}, '')
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -128,6 +263,7 @@ export default function ChatTutor() {
     try {
       const { data } = await api.post('/api/chat/local', {
         mensaje: text,
+        conversacion_id: activeConvId,
         leccion_adjunta: {
           tema: lesson.tema,
           idioma: lesson.idioma,
@@ -139,6 +275,11 @@ export default function ChatTutor() {
           resultado_json: lesson.resultado_json,
         },
       })
+
+      if (!activeConvId && data.conversacion_id) {
+        setActiveConvId(data.conversacion_id)
+        fetchConversations()
+      }
 
       setMessages((prev) => [...prev, {
         id: data.mensaje_id ?? Date.now() + 1,
@@ -164,7 +305,6 @@ export default function ChatTutor() {
     if (!text || sending) return
     setInput('')
 
-    // If there's a lesson attached, send it along
     if (attachedLesson) {
       await sendWithLesson(text, attachedLesson)
       return
@@ -176,7 +316,15 @@ export default function ChatTutor() {
 
     setSending(true)
     try {
-      const { data } = await api.post('/api/chat/local', { mensaje: text })
+      const { data } = await api.post('/api/chat/local', {
+        mensaje: text,
+        conversacion_id: activeConvId,
+      })
+
+      if (!activeConvId && data.conversacion_id) {
+        setActiveConvId(data.conversacion_id)
+        fetchConversations()
+      }
 
       setMessages((prev) => [...prev, {
         id: data.mensaje_id ?? Date.now() + 1,
@@ -197,8 +345,9 @@ export default function ChatTutor() {
     }
   }
 
-  function removeAttachment() {
-    setAttachedLesson(null)
+  function handleLessonSelect(lesson) {
+    setAttachedLesson(lesson)
+    setShowLessonPicker(false)
   }
 
   return (
@@ -214,10 +363,21 @@ export default function ChatTutor() {
             >
               ←
             </button>
-            <img src="/logo.jpg" alt="PolyIA" className="w-8 h-8 rounded-full object-cover" />
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-500 dark:text-gray-400"
+              aria-label="Conversaciones"
+              title="Conversaciones"
+            >
+              💬
+            </button>
             <div>
               <h1 className="text-lg font-bold text-primary-600 dark:text-primary-400">Chat Tutor</h1>
-              <p className="text-xs text-gray-400 dark:text-gray-500">Modelo local · adjunta lecciones para análisis</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500">
+                {activeConvId
+                  ? conversations.find((c) => c.id === activeConvId)?.titulo || 'Conversación'
+                  : 'Nueva conversación'}
+              </p>
             </div>
           </div>
           <button
@@ -230,8 +390,74 @@ export default function ChatTutor() {
         </div>
       </header>
 
+      {/* ── Sidebar overlay ── */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-20 flex" onClick={() => setSidebarOpen(false)}>
+          <div
+            className="w-72 bg-card-light dark:bg-card-dark shadow-2xl h-full flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+              <h2 className="font-semibold text-gray-800 dark:text-gray-100">Conversaciones</h2>
+              <button onClick={() => setSidebarOpen(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">✕</button>
+            </div>
+
+            <button
+              onClick={handleNewConversation}
+              className="mx-3 mt-3 mb-2 py-2 rounded-xl text-sm font-semibold bg-primary-600 text-white hover:bg-primary-700 transition-colors flex items-center justify-center gap-1"
+            >
+              ＋ Nueva conversación
+            </button>
+
+            <div className="flex-1 overflow-y-auto px-2 pb-2">
+              {loadingConvs ? (
+                <p className="text-center text-gray-400 text-xs py-4">Cargando…</p>
+              ) : conversations.length === 0 ? (
+                <p className="text-center text-gray-400 text-xs py-4">Sin conversaciones aún</p>
+              ) : (
+                conversations.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => loadConversation(c.id)}
+                    className={`w-full text-left px-3 py-2.5 rounded-xl mb-1 transition-colors group flex items-center gap-2 ${
+                      activeConvId === c.id
+                        ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300'
+                        : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300'
+                    }`}
+                  >
+                    <span className="text-sm flex-1 truncate">{c.titulo}</span>
+                    <span className="text-[10px] text-gray-400">{c.message_count}</span>
+                    <button
+                      onClick={(e) => handleDeleteConversation(c.id, e)}
+                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-all text-xs"
+                      title="Eliminar"
+                    >
+                      🗑
+                    </button>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+          <div className="flex-1 bg-black/30" />
+        </div>
+      )}
+
       {/* ── Messages area ── */}
       <main className="flex-1 overflow-y-auto max-w-3xl w-full mx-auto px-4 py-6 chat-scroll">
+        {messages.length === 0 && !loadingMsgs && (
+          <div className="text-center py-12">
+            <p className="text-4xl mb-3">🤖</p>
+            <p className="text-gray-500 dark:text-gray-400 text-sm">
+              ¡Hola! Soy tu tutor de idiomas. Escribe un mensaje o adjunta una lección con el botón 📎 para que la analice.
+            </p>
+          </div>
+        )}
+
+        {loadingMsgs && (
+          <p className="text-center text-gray-400 text-sm py-8">Cargando mensajes…</p>
+        )}
+
         {messages.map((msg) => (
           <Bubble key={msg.id} msg={msg} />
         ))}
@@ -269,7 +495,7 @@ export default function ChatTutor() {
                 {attachedLesson.tema} — {attachedLesson.puntuacion ?? 0}%
               </span>
               <button
-                onClick={removeAttachment}
+                onClick={() => setAttachedLesson(null)}
                 className="text-gray-400 hover:text-red-500 transition-colors text-xs"
                 aria-label="Quitar adjunto"
               >
@@ -281,8 +507,27 @@ export default function ChatTutor() {
 
         <form
           onSubmit={sendMessage}
-          className="max-w-3xl mx-auto px-4 py-3 flex items-end gap-3"
+          className="max-w-3xl mx-auto px-4 py-3 flex items-end gap-2"
         >
+          {/* Lesson picker button */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowLessonPicker(!showLessonPicker)}
+              className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400"
+              title="Adjuntar lección"
+              aria-label="Adjuntar lección"
+            >
+              📎
+            </button>
+            {showLessonPicker && (
+              <LessonPicker
+                onSelect={handleLessonSelect}
+                onClose={() => setShowLessonPicker(false)}
+              />
+            )}
+          </div>
+
           <textarea
             ref={inputRef}
             rows={1}
@@ -316,7 +561,7 @@ export default function ChatTutor() {
           </button>
         </form>
         <p className="text-center text-xs text-gray-300 dark:text-gray-600 pb-2">
-          Shift+Enter para nueva línea · Enter para enviar
+          Shift+Enter para nueva línea · Enter para enviar · 📎 para adjuntar lecciones
         </p>
       </footer>
     </div>

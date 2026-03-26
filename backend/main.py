@@ -36,17 +36,19 @@ from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
-from models import Leccion, Mensaje, ProgresoNivel, Usuario
+from models import Conversacion, Leccion, Mensaje, ProgresoNivel, Usuario
 from schemas import (
     ChangePasswordRequest,
     ChatRequest,
     ChatResponse,
     CompletarLeccionRequest,
+    ConversacionResponse,
     GenerarLeccionRequest,
     IDIOMAS_PERMITIDOS,
     LeccionResponse,
     LESSONS_TO_UNLOCK,
     LoginRequest,
+    MensajeResponse,
     NIVELES_CEFR,
     NIVELES_JLPT,
     ProgresoResponse,
@@ -856,7 +858,6 @@ async def text_to_speech(payload: TTSRequest):
         headers={"Content-Disposition": "inline; filename=tts.mp3"},
     )
 
-
 # ---------------------------------------------------------------------------
 # Local SLM chat – grammar correction and conversational feedback
 # ---------------------------------------------------------------------------
@@ -866,14 +867,45 @@ LOCAL_MODEL_URL: str = os.getenv(
 )
 LOCAL_MODEL_NAME: str = os.getenv("LOCAL_MODEL_NAME", "qwen3:8b")
 
+MAX_CONVERSATIONS = 5
+CONTEXT_MESSAGES = 6  # last N messages sent as context to LLM
 
-def _build_chat_prompt(mensaje: str, leccion_adjunta: dict | None = None) -> str:
-    """Build a chat prompt. When a lesson is attached, include its data for analysis."""
+
+def _build_chat_prompt(
+    mensaje: str,
+    history: list[dict] | None = None,
+    leccion_adjunta: dict | None = None,
+) -> str:
+    """Build a chat prompt with optional history and lesson attachment."""
+    parts = []
+
+    # System instruction
     if leccion_adjunta:
-        return (
+        parts.append(
             "Eres un tutor de idiomas experto, amigable y paciente. "
-            "El estudiante acaba de completar una lección y te la adjunta para que la analices.\n\n"
-            f"=== DATOS DE LA LECCIÓN ===\n"
+            "El estudiante acaba de completar una lección y te la adjunta para que la analices."
+        )
+    else:
+        parts.append(
+            "Eres un tutor de idiomas amigable, paciente y conversacional. "
+            "Puedes ayudar con cualquier idioma que el estudiante quiera practicar. "
+            "NO des correcciones gramaticales a menos que el estudiante te lo pida explícitamente. "
+            "Simplemente conversa de forma natural y responde sus preguntas."
+        )
+
+    # Conversation history
+    if history:
+        parts.append("\n\n=== HISTORIAL DE CONVERSACIÓN ===")
+        for h in history:
+            parts.append(f"Estudiante: {h['user']}")
+            if h.get('ai'):
+                parts.append(f"Tutor: {h['ai']}")
+        parts.append("=== FIN DEL HISTORIAL ===\n")
+
+    # Lesson attachment
+    if leccion_adjunta:
+        parts.append(
+            f"\n=== DATOS DE LA LECCIÓN ===\n"
             f"Idioma: {leccion_adjunta.get('idioma', '')}\n"
             f"Nivel: {leccion_adjunta.get('nivel', '')}\n"
             f"Tema: {leccion_adjunta.get('tema', '')}\n"
@@ -881,20 +913,132 @@ def _build_chat_prompt(mensaje: str, leccion_adjunta: dict | None = None) -> str
             f"Puntuación: {leccion_adjunta.get('puntuacion', 0)}%\n"
             f"Contenido del ejercicio:\n{leccion_adjunta.get('contenido', '')}\n"
             f"Resultados del estudiante:\n{leccion_adjunta.get('resultado_json', '')}\n"
-            f"=== FIN DE DATOS ===\n\n"
-            f"Mensaje del estudiante: \"{mensaje}\"\n\n"
-            "Analiza los resultados, identifica errores y áreas de mejora, y da consejos claros. "
-            "Responde en español de forma clara y amigable."
+            f"=== FIN DE DATOS ===\n"
         )
-    return (
-        "Eres un tutor de idiomas amigable, paciente y conversacional. "
-        "Puedes ayudar con cualquier idioma que el estudiante quiera practicar. "
-        "NO des correcciones gramaticales a menos que el estudiante te lo pida explícitamente. "
-        "Simplemente conversa de forma natural y responde sus preguntas.\n\n"
-        f"Mensaje del estudiante: \"{mensaje}\"\n\n"
-        "Responde de forma natural en español (o en el idioma que el estudiante use)."
-    )
 
+    parts.append(f'\nMensaje del estudiante: "{mensaje}"\n')
+    parts.append("Responde de forma clara y amigable en español (o en el idioma que el estudiante use).")
+
+    return "\n".join(parts)
+
+
+# ── Conversation CRUD ─────────────────────────────────────────────────
+
+@app.get("/api/chat/conversaciones")
+def list_conversations(
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(_get_current_user),
+):
+    """List user's conversations (newest first, max 5)."""
+    convos = (
+        db.query(Conversacion)
+        .filter(Conversacion.usuario_id == current_user.id)
+        .order_by(Conversacion.updated_at.desc())
+        .limit(MAX_CONVERSATIONS)
+        .all()
+    )
+    result = []
+    for c in convos:
+        msg_count = (
+            db.query(Mensaje)
+            .filter(Mensaje.conversacion_id == c.id)
+            .count()
+        )
+        result.append({
+            "id": c.id,
+            "titulo": c.titulo,
+            "created_at": c.created_at.isoformat() if c.created_at else "",
+            "updated_at": c.updated_at.isoformat() if c.updated_at else "",
+            "message_count": msg_count,
+        })
+    return result
+
+
+@app.post("/api/chat/conversacion")
+def create_conversation(
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(_get_current_user),
+):
+    """Create a new conversation. Enforces max 5: auto-deletes oldest."""
+    existing = (
+        db.query(Conversacion)
+        .filter(Conversacion.usuario_id == current_user.id)
+        .order_by(Conversacion.updated_at.desc())
+        .all()
+    )
+    # Delete oldest if at limit
+    while len(existing) >= MAX_CONVERSATIONS:
+        oldest = existing.pop()
+        db.delete(oldest)
+    db.flush()
+
+    conv = Conversacion(
+        titulo="Nueva conversación",
+        usuario_id=current_user.id,
+    )
+    db.add(conv)
+    db.commit()
+    db.refresh(conv)
+    return {
+        "id": conv.id,
+        "titulo": conv.titulo,
+        "created_at": conv.created_at.isoformat() if conv.created_at else "",
+        "updated_at": conv.updated_at.isoformat() if conv.updated_at else "",
+        "message_count": 0,
+    }
+
+
+@app.get("/api/chat/conversacion/{conv_id}")
+def get_conversation_messages(
+    conv_id: int,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(_get_current_user),
+):
+    """Get all messages for a conversation."""
+    conv = (
+        db.query(Conversacion)
+        .filter(Conversacion.id == conv_id, Conversacion.usuario_id == current_user.id)
+        .first()
+    )
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversación no encontrada.")
+    msgs = (
+        db.query(Mensaje)
+        .filter(Mensaje.conversacion_id == conv_id)
+        .order_by(Mensaje.created_at.asc())
+        .all()
+    )
+    return [
+        {
+            "id": m.id,
+            "texto_usuario": m.texto_usuario,
+            "respuesta_ia": m.respuesta_ia,
+            "created_at": m.created_at.isoformat() if m.created_at else "",
+        }
+        for m in msgs
+    ]
+
+
+@app.delete("/api/chat/conversacion/{conv_id}")
+def delete_conversation(
+    conv_id: int,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(_get_current_user),
+):
+    """Delete a conversation and its messages."""
+    conv = (
+        db.query(Conversacion)
+        .filter(Conversacion.id == conv_id, Conversacion.usuario_id == current_user.id)
+        .first()
+    )
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversación no encontrada.")
+    db.delete(conv)
+    db.commit()
+    return {"message": "Conversación eliminada."}
+
+
+# ── Chat with LLM ─────────────────────────────────────────────────────
 
 @app.post("/api/chat/local", response_model=ChatResponse)
 async def chat_local(
@@ -904,13 +1048,54 @@ async def chat_local(
 ) -> ChatResponse:
     """
     Send a message to the local SLM (via Ollama).
-    To use: run `ollama pull qwen3:8b` and ensure Ollama is running.
+    Messages are persisted to a conversation. History is sent as context.
     """
+    # Resolve or create conversation
+    conv = None
+    if payload.conversacion_id:
+        conv = (
+            db.query(Conversacion)
+            .filter(
+                Conversacion.id == payload.conversacion_id,
+                Conversacion.usuario_id == current_user.id,
+            )
+            .first()
+        )
+    if not conv:
+        # Auto-create and enforce limit
+        existing = (
+            db.query(Conversacion)
+            .filter(Conversacion.usuario_id == current_user.id)
+            .order_by(Conversacion.updated_at.desc())
+            .all()
+        )
+        while len(existing) >= MAX_CONVERSATIONS:
+            oldest = existing.pop()
+            db.delete(oldest)
+        db.flush()
+        conv = Conversacion(
+            titulo=payload.mensaje[:80],
+            usuario_id=current_user.id,
+        )
+        db.add(conv)
+        db.flush()
+
+    # Load recent history
+    recent = (
+        db.query(Mensaje)
+        .filter(Mensaje.conversacion_id == conv.id)
+        .order_by(Mensaje.created_at.desc())
+        .limit(CONTEXT_MESSAGES)
+        .all()
+    )
+    recent.reverse()
+    history = [{"user": m.texto_usuario, "ai": m.respuesta_ia or ""} for m in recent]
+
+    # Build prompt
     leccion_dict = payload.leccion_adjunta.model_dump() if payload.leccion_adjunta else None
-    prompt = _build_chat_prompt(payload.mensaje, leccion_dict)
+    prompt = _build_chat_prompt(payload.mensaje, history, leccion_dict)
 
     respuesta_texto = ""
-
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
@@ -923,7 +1108,6 @@ async def chat_local(
             )
         resp.raise_for_status()
         respuesta_texto = resp.json().get("response", "")
-
     except (httpx.ConnectError, httpx.HTTPStatusError):
         respuesta_texto = (
             "El modelo local no está disponible. "
@@ -931,18 +1115,27 @@ async def chat_local(
             f"`ollama pull {LOCAL_MODEL_NAME}`."
         )
 
+    # Save message
     mensaje_db = Mensaje(
         texto_usuario=payload.mensaje,
         respuesta_ia=respuesta_texto,
         usuario_id=current_user.id,
+        conversacion_id=conv.id,
     )
     db.add(mensaje_db)
+
+    # Update conversation title from first message
+    msg_count = db.query(Mensaje).filter(Mensaje.conversacion_id == conv.id).count()
+    if msg_count == 0:
+        conv.titulo = payload.mensaje[:80]
+
     db.commit()
     db.refresh(mensaje_db)
 
     return ChatResponse(
         respuesta=respuesta_texto,
         mensaje_id=mensaje_db.id,
+        conversacion_id=conv.id,
     )
 
 
