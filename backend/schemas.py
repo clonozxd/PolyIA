@@ -136,8 +136,30 @@ class LeccionAdjunta(BaseModel):
 class ChatRequest(BaseModel):
     mensaje: str = Field(min_length=1, max_length=4000)
     leccion_adjunta: LeccionAdjunta | None = None
+    conversacion_id: int | None = None
 
 
 class ChatResponse(BaseModel):
     respuesta: str
     mensaje_id: int | None = None
+    conversacion_id: int | None = None
+
+
+class ConversacionResponse(BaseModel):
+    id: int
+    titulo: str
+    created_at: str
+    updated_at: str
+    message_count: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class MensajeResponse(BaseModel):
+    id: int
+    texto_usuario: str
+    respuesta_ia: str | None = None
+    created_at: str
+
+    model_config = {"from_attributes": True}
+

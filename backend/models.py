@@ -62,6 +62,9 @@ class Usuario(Base):
     progresos: Mapped[list["ProgresoNivel"]] = relationship(
         "ProgresoNivel", back_populates="usuario", cascade="all, delete-orphan"
     )
+    conversaciones: Mapped[list["Conversacion"]] = relationship(
+        "Conversacion", back_populates="usuario", cascade="all, delete-orphan"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +129,33 @@ class ProgresoNivel(Base):
 
 
 # ---------------------------------------------------------------------------
+# Conversacion – groups chat messages
+# ---------------------------------------------------------------------------
+class Conversacion(Base):
+    """A chat conversation between a user and the AI tutor."""
+
+    __tablename__ = "conversaciones"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    titulo: Mapped[str] = mapped_column(String(200), nullable=False, default="Nueva conversación")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    usuario_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("usuarios.id", ondelete="CASCADE"), nullable=False
+    )
+    usuario: Mapped["Usuario"] = relationship("Usuario", back_populates="conversaciones")
+    mensajes: Mapped[list["Mensaje"]] = relationship(
+        "Mensaje", back_populates="conversacion", cascade="all, delete-orphan",
+        order_by="Mensaje.created_at"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Mensaje
 # ---------------------------------------------------------------------------
 class Mensaje(Base):
@@ -146,3 +176,11 @@ class Mensaje(Base):
         Integer, ForeignKey("usuarios.id", ondelete="CASCADE"), nullable=False
     )
     usuario: Mapped["Usuario"] = relationship("Usuario", back_populates="mensajes")
+
+    # Foreign key → Conversacion (nullable for old messages)
+    conversacion_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("conversaciones.id", ondelete="CASCADE"), nullable=True
+    )
+    conversacion: Mapped["Conversacion | None"] = relationship(
+        "Conversacion", back_populates="mensajes"
+    )
