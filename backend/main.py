@@ -759,6 +759,144 @@ def obtener_todo_progreso(
 
 
 # ---------------------------------------------------------------------------
+# Statistics
+# ---------------------------------------------------------------------------
+
+IDIOMA_LABELS = {
+    "espanol": "Español",
+    "ingles": "Inglés",
+    "japones": "Japonés",
+    "aleman": "Alemán",
+}
+
+TEMA_LABELS = {
+    "vocabulario_tematico": "Vocabulario Temático",
+    "gramatica_practica": "Gramática Práctica",
+    "comprension_auditiva": "Comprensión Auditiva",
+    "expresion_oral": "Expresión Oral",
+    "lectura_escritura": "Lectura y Escritura",
+    "cultura_modismos": "Cultura y Modismos",
+}
+
+TIPO_LABELS = {
+    "matching": "Unir pares",
+    "syntax_sorting": "Ordenar oración",
+    "multiple_choice": "Opción múltiple",
+    "categorization": "Categorización",
+    "fill_blank": "Completar hueco",
+    "translation": "Traducción",
+    "dictation": "Dictado",
+    "flashcards": "Flashcards",
+}
+
+
+@app.get("/api/estadisticas")
+def obtener_estadisticas(
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(_get_current_user),
+):
+    """Return user statistics: weekly activity + global summary."""
+    all_lessons = (
+        db.query(Leccion)
+        .filter(Leccion.usuario_id == current_user.id)
+        .all()
+    )
+    completed_lessons = [l for l in all_lessons if l.completada]
+
+    # ── Weekly activity (last 7 days) ──
+    today = datetime.now(timezone.utc).date()
+    week_data = []
+    for i in range(6, -1, -1):
+        day = today - timedelta(days=i)
+        day_lessons = [
+            l for l in completed_lessons
+            if l.created_at and l.created_at.date() == day
+        ]
+        week_data.append({
+            "date": day.isoformat(),
+            "day_name": ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"][day.weekday()],
+            "count": len(day_lessons),
+            "avg_score": (
+                round(sum(l.puntuacion for l in day_lessons) / len(day_lessons))
+                if day_lessons else 0
+            ),
+        })
+
+    # ── Global summary ──
+    total = len(all_lessons)
+    total_completed = len(completed_lessons)
+    avg_score = (
+        round(sum(l.puntuacion for l in completed_lessons) / total_completed)
+        if total_completed else 0
+    )
+    best_score = max((l.puntuacion for l in completed_lessons), default=0)
+
+    # Per-language breakdown
+    lang_stats = {}
+    for l in all_lessons:
+        lang = l.idioma
+        if lang not in lang_stats:
+            lang_stats[lang] = {"total": 0, "completed": 0, "sum_score": 0, "label": IDIOMA_LABELS.get(lang, lang)}
+        lang_stats[lang]["total"] += 1
+        if l.completada:
+            lang_stats[lang]["completed"] += 1
+            lang_stats[lang]["sum_score"] += l.puntuacion
+
+    per_language = []
+    for lang, s in lang_stats.items():
+        per_language.append({
+            "idioma": lang,
+            "label": s["label"],
+            "total": s["total"],
+            "completed": s["completed"],
+            "avg_score": round(s["sum_score"] / s["completed"]) if s["completed"] else 0,
+        })
+    per_language.sort(key=lambda x: x["completed"], reverse=True)
+
+    # Favorite topic (most completed)
+    topic_counts = {}
+    for l in completed_lessons:
+        cat = l.tema_categoria
+        topic_counts[cat] = topic_counts.get(cat, 0) + 1
+    favorite_topic = max(topic_counts, key=topic_counts.get) if topic_counts else None
+
+    # Favorite exercise type
+    type_counts = {}
+    for l in completed_lessons:
+        t = l.tipo_ejercicio
+        type_counts[t] = type_counts.get(t, 0) + 1
+    favorite_type = max(type_counts, key=type_counts.get) if type_counts else None
+
+    # Per-topic breakdown
+    per_topic = [
+        {"topic": k, "label": TEMA_LABELS.get(k, k), "count": v}
+        for k, v in sorted(topic_counts.items(), key=lambda x: x[1], reverse=True)
+    ]
+
+    # Per-type breakdown
+    per_type = [
+        {"type": k, "label": TIPO_LABELS.get(k, k), "count": v}
+        for k, v in sorted(type_counts.items(), key=lambda x: x[1], reverse=True)
+    ]
+
+    return {
+        "weekly_activity": week_data,
+        "summary": {
+            "total_lessons": total,
+            "total_completed": total_completed,
+            "pending": total - total_completed,
+            "avg_score": avg_score,
+            "best_score": best_score,
+            "favorite_topic": TEMA_LABELS.get(favorite_topic, favorite_topic) if favorite_topic else None,
+            "favorite_type": TIPO_LABELS.get(favorite_type, favorite_type) if favorite_type else None,
+            "per_language": per_language,
+            "per_topic": per_topic,
+            "per_type": per_type,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # TTS – edge-tts
 # ---------------------------------------------------------------------------
 

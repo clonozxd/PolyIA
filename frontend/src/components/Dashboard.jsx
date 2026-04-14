@@ -345,6 +345,20 @@ export default function Dashboard() {
               </button>
             </div>
 
+            {/* Stats CTA */}
+            <div className="card bg-gradient-to-br from-indigo-600 to-purple-700 text-white">
+              <h3 className="text-lg font-semibold mb-2">Mis Estadísticas 📊</h3>
+              <p className="text-indigo-100 text-sm mb-4">
+                Revisa tu actividad semanal, puntajes promedio y progreso por idioma.
+              </p>
+              <button
+                onClick={() => navigate('/estadisticas')}
+                className="bg-white text-indigo-700 hover:bg-indigo-50 font-semibold py-2 px-5 rounded-xl transition-colors"
+              >
+                Ver Estadísticas →
+              </button>
+            </div>
+
             {/* Stats */}
             <div className="grid grid-cols-2 gap-3">
               <StatCard emoji="📚" label="Lecciones totales" value={loadingLessons ? '…' : lessons.length} />
