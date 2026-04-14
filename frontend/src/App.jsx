@@ -17,6 +17,7 @@ import LoginForm from './components/LoginForm'
 import Dashboard from './components/Dashboard'
 import ChatTutor from './components/ChatTutor'
 import LessonExercise from './components/LessonExercise'
+import StatsPage from './components/StatsPage'
 
 /**
  * ProtectedRoute – wrapper that enforces authentication.
@@ -71,6 +72,15 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <LessonExercise />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/estadisticas"
+        element={
+          <ProtectedRoute>
+            <StatsPage />
           </ProtectedRoute>
         }
       />
