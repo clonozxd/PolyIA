@@ -77,6 +77,13 @@ export function AuthProvider({ children }) {
     }
   }, [token])
 
+  // Global unauthorized handler triggered by api.js when JWT is invalid/expired.
+  useEffect(() => {
+    const onUnauthorized = () => logout()
+    window.addEventListener('polyia:unauthorized', onUnauthorized)
+    return () => window.removeEventListener('polyia:unauthorized', onUnauthorized)
+  }, [logout])
+
   const value = useMemo(
     () => ({ token, user, login, register, logout, updateUser, isAuthenticated: !!token }),
     [token, user, login, register, logout, updateUser]

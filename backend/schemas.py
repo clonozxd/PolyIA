@@ -88,6 +88,7 @@ class LeccionResponse(BaseModel):
     tema_categoria: str
     completada: bool
     puntuacion: int
+    resultado_json: str | None = None
     proveedor_ia: str
 
     model_config = {"from_attributes": True}

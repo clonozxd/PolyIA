@@ -10,6 +10,9 @@
  *   - See their score
  *   - Send results to Chat Tutor for explanation
  *   - Return to dashboard
+ *
+ * When revisiting a completed lesson, the user sees a read-only
+ * review of all questions with the answers they originally gave.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
@@ -133,6 +136,285 @@ function AudioButton({ audioUrl, text, idioma, size = 'normal' }) {
   )
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   REVIEW COMPONENTS (read-only, show saved answers)
+   ══════════════════════════════════════════════════════════════════════ */
+
+function ReviewMatching({ data, userAnswers }) {
+  const pares = data.pares || []
+  // userAnswers.attempts = [{ left, right, correct }]
+  return (
+    <div>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{data.instrucciones}</p>
+      <div className="space-y-2">
+        {pares.map((p, i) => (
+          <div key={i} className="flex items-center gap-3 px-4 py-3 rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
+            <span className="font-medium text-gray-800 dark:text-gray-200">{p.termino}</span>
+            <span className="text-gray-400">→</span>
+            <span className="text-green-700 dark:text-green-400">{p.definicion}</span>
+          </div>
+        ))}
+      </div>
+      {userAnswers?.errors > 0 && (
+        <p className="text-sm text-red-500 dark:text-red-400 mt-3">
+          Errores cometidos: {userAnswers.errors}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function ReviewSyntaxSorting({ data, userAnswers }) {
+  const ejercicios = data.ejercicios || []
+  const answers = userAnswers?.answers || []
+  return (
+    <div>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{data.instrucciones}</p>
+      <div className="space-y-4">
+        {ejercicios.map((ej, i) => {
+          const ans = answers[i]
+          const isCorrect = ans?.correct
+          return (
+            <div key={i} className={`rounded-xl border px-4 py-3 ${isCorrect ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'}`}>
+              <p className="text-xs text-gray-400 mb-1">Ejercicio {i + 1}</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Traducción: {ej.traduccion}</p>
+              <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                Tu respuesta: <span className={isCorrect ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>{ans?.userAnswer || '—'}</span>
+              </p>
+              {!isCorrect && (
+                <p className="text-sm text-green-600 dark:text-green-400 mt-1">Correcta: {ej.frase_correcta}</p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ReviewMultipleChoice({ data, userAnswers, idioma }) {
+  const preguntas = data.preguntas || []
+  const answers = userAnswers?.answers || []
+  return (
+    <div>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{data.instrucciones}</p>
+      <div className="space-y-6">
+        {preguntas.map((q, i) => {
+          const ans = answers[i]
+          const userSelected = ans?.selected ?? -1
+          const isCorrect = ans?.correct
+          const hasAudio = !!q.audio_url || !!q.audio_texto
+          return (
+            <div key={i} className="rounded-xl border border-gray-200 dark:border-gray-700 px-4 py-4">
+              <p className="text-xs text-gray-400 mb-2">Pregunta {i + 1}</p>
+              {hasAudio && <AudioButton audioUrl={q.audio_url} text={q.audio_texto} idioma={idioma} />}
+              <p className="text-base font-semibold text-gray-800 dark:text-gray-100 mb-3">{q.pregunta}</p>
+              <div className="space-y-2">
+                {q.opciones.map((opt, j) => (
+                  <div
+                    key={j}
+                    className={`px-4 py-3 rounded-xl border text-sm ${
+                      j === q.respuesta_correcta
+                        ? 'bg-green-100 dark:bg-green-900/30 border-green-500 text-green-800 dark:text-green-300'
+                        : j === userSelected && !isCorrect
+                          ? 'bg-red-100 dark:bg-red-900/30 border-red-500 text-red-800 dark:text-red-300'
+                          : 'border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400'
+                    }`}
+                  >
+                    {j === userSelected && '→ '}{opt}
+                    {j === q.respuesta_correcta && ' ✅'}
+                    {j === userSelected && j !== q.respuesta_correcta && ' ❌'}
+                  </div>
+                ))}
+              </div>
+              {q.explicacion && (
+                <div className="mt-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-xl px-4 py-3 text-sm text-blue-700 dark:text-blue-300">
+                  💡 {q.explicacion}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ReviewCategorization({ data, userAnswers }) {
+  const categorias = data.categorias || []
+  const palabras = data.palabras || []
+  const answers = userAnswers?.answers || []
+  return (
+    <div>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{data.instrucciones}</p>
+      <div className="space-y-2">
+        {palabras.map((w, i) => {
+          const ans = answers[i]
+          const isCorrect = ans?.correct
+          const userCat = ans?.selectedCategory ?? -1
+          return (
+            <div key={i} className={`rounded-xl border px-4 py-3 ${isCorrect ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'}`}>
+              <span className="font-medium text-gray-800 dark:text-gray-200">{w.palabra}</span>
+              <span className="text-gray-400 mx-2">→</span>
+              <span className={isCorrect ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
+                {categorias[userCat] || '—'}
+              </span>
+              {!isCorrect && (
+                <span className="text-green-600 dark:text-green-400 ml-2">(Correcta: {categorias[w.categoria]})</span>
+              )}
+              {isCorrect ? ' ✅' : ' ❌'}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ReviewFillBlank({ data, userAnswers, idioma }) {
+  const ejercicios = data.ejercicios || []
+  const answers = userAnswers?.answers || []
+  return (
+    <div>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{data.instrucciones}</p>
+      <div className="space-y-4">
+        {ejercicios.map((ex, i) => {
+          const ans = answers[i]
+          const isCorrect = ans?.correct
+          const hasAudio = !!ex.audio_url || !!ex.audio_texto
+          return (
+            <div key={i} className={`rounded-xl border px-4 py-3 ${isCorrect ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'}`}>
+              <p className="text-xs text-gray-400 mb-1">Ejercicio {i + 1}</p>
+              {hasAudio && <AudioButton audioUrl={ex.audio_url} text={ex.audio_texto} idioma={idioma} />}
+              <p className="text-sm text-gray-600 dark:text-gray-300 mb-1">{ex.oracion}</p>
+              <p className="text-sm font-medium">
+                Tu respuesta: <span className={isCorrect ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>{ans?.userAnswer || '—'}</span>
+                {isCorrect ? ' ✅' : ' ❌'}
+              </p>
+              {!isCorrect && (
+                <p className="text-sm text-green-600 dark:text-green-400 mt-1">Correcta: {ex.respuesta}</p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ReviewTranslation({ data, userAnswers }) {
+  const ejercicios = data.ejercicios || []
+  const answers = userAnswers?.answers || []
+  return (
+    <div>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{data.instrucciones}</p>
+      <div className="space-y-4">
+        {ejercicios.map((ex, i) => {
+          const ans = answers[i]
+          const isCorrect = ans?.correct
+          return (
+            <div key={i} className={`rounded-xl border px-4 py-3 ${isCorrect ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'}`}>
+              <p className="text-xs text-gray-400 mb-1">Ejercicio {i + 1}</p>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mb-1 bg-gray-50 dark:bg-gray-800 rounded-lg px-3 py-2">{ex.texto_original}</p>
+              <p className="text-sm font-medium">
+                Tu respuesta: <span className={isCorrect ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>{ans?.userAnswer || '—'}</span>
+                {isCorrect ? ' ✅' : ' ❌'}
+              </p>
+              {!isCorrect && (
+                <p className="text-sm text-green-600 dark:text-green-400 mt-1">Correcta: {ex.traduccion_correcta}</p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ReviewDictation({ data, userAnswers, idioma }) {
+  const ejercicios = data.ejercicios || []
+  const answers = userAnswers?.answers || []
+  return (
+    <div>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{data.instrucciones}</p>
+      <div className="space-y-4">
+        {ejercicios.map((ex, i) => {
+          const ans = answers[i]
+          const isCorrect = ans?.correct
+          return (
+            <div key={i} className={`rounded-xl border px-4 py-3 ${isCorrect ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'}`}>
+              <p className="text-xs text-gray-400 mb-1">Ejercicio {i + 1}</p>
+              <AudioButton audioUrl={ex.audio_url} text={ex.texto} idioma={idioma} />
+              <p className="text-sm font-medium">
+                Tu respuesta: <span className={isCorrect ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>{ans?.userAnswer || '—'}</span>
+                {isCorrect ? ' ✅' : ' ❌'}
+              </p>
+              {!isCorrect && (
+                <p className="text-sm text-green-600 dark:text-green-400 mt-1">Correcto: {ex.texto}</p>
+              )}
+              {ex.traduccion && (
+                <p className="text-xs text-gray-400 mt-1">Traducción: {ex.traduccion}</p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ReviewFlashcards({ data, userAnswers }) {
+  const tarjetas = data.tarjetas || []
+  const answers = userAnswers?.answers || []
+  return (
+    <div>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{data.instrucciones}</p>
+      <div className="space-y-4">
+        {tarjetas.map((card, i) => {
+          const ans = answers[i]
+          const rating = ans?.rating || 'unknown'
+          const ratingColors = {
+            easy: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800',
+            medium: 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800',
+            hard: 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800',
+            unknown: 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700',
+          }
+          const ratingLabels = { easy: '😊 Fácil', medium: '🤔 Medio', hard: '😣 Difícil', unknown: '—' }
+          return (
+            <div key={i} className={`rounded-xl border px-4 py-4 ${ratingColors[rating]}`}>
+              <p className="text-xs text-gray-400 mb-2">Tarjeta {i + 1}</p>
+              <p className="text-lg font-bold text-gray-800 dark:text-gray-100">{card.frente}</p>
+              <p className="text-base text-primary-600 dark:text-primary-400 mt-1">{card.reverso}</p>
+              {card.ejemplo && <p className="text-sm text-gray-500 italic mt-1">"{card.ejemplo}"</p>}
+              <p className="text-sm mt-2 font-medium text-gray-600 dark:text-gray-300">Tu evaluación: {ratingLabels[rating]}</p>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/** Render the appropriate review component based on exercise type */
+function ReviewRenderer({ tipo, data, userAnswers, idioma }) {
+  switch (tipo) {
+    case 'matching':       return <ReviewMatching data={data} userAnswers={userAnswers} />
+    case 'syntax_sorting': return <ReviewSyntaxSorting data={data} userAnswers={userAnswers} />
+    case 'multiple_choice': return <ReviewMultipleChoice data={data} userAnswers={userAnswers} idioma={idioma} />
+    case 'categorization': return <ReviewCategorization data={data} userAnswers={userAnswers} />
+    case 'fill_blank':     return <ReviewFillBlank data={data} userAnswers={userAnswers} idioma={idioma} />
+    case 'translation':    return <ReviewTranslation data={data} userAnswers={userAnswers} />
+    case 'dictation':      return <ReviewDictation data={data} userAnswers={userAnswers} idioma={idioma} />
+    case 'flashcards':     return <ReviewFlashcards data={data} userAnswers={userAnswers} />
+    default:               return <p className="text-gray-500">Tipo de ejercicio no soportado para revisión.</p>
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   INTERACTIVE EXERCISE COMPONENTS (with answer tracking)
+   ══════════════════════════════════════════════════════════════════════ */
+
 /* ── Matching Exercise ────────────────────────────────────────────── */
 
 function MatchingExercise({ data, onComplete }) {
@@ -165,7 +447,7 @@ function MatchingExercise({ data, onComplete }) {
   useEffect(() => {
     if (matched.size === pares.length && pares.length > 0) {
       const score = Math.max(0, Math.round(((pares.length - errors) / pares.length) * 100))
-      onComplete(score)
+      onComplete(score, { type: 'matching', errors })
     }
   }, [matched, pares.length, errors, onComplete])
 
@@ -222,6 +504,7 @@ function SyntaxSortingExercise({ data, onComplete }) {
   const [placed, setPlaced] = useState([])
   const [pool, setPool] = useState([])
   const [results, setResults] = useState([])
+  const answersRef = useRef([])
 
   useEffect(() => {
     if (ejercicios[current]) {
@@ -244,11 +527,12 @@ function SyntaxSortingExercise({ data, onComplete }) {
     const correct = normalize(answer) === normalize(ejercicios[current].frase_correcta)
     const newResults = [...results, correct]
     setResults(newResults)
+    answersRef.current.push({ userAnswer: answer, correct })
     if (current + 1 < ejercicios.length) {
       setCurrent(current + 1)
     } else {
       const score = Math.round((newResults.filter(Boolean).length / newResults.length) * 100)
-      onComplete(score)
+      onComplete(score, { type: 'syntax_sorting', answers: answersRef.current })
     }
   }
 
@@ -301,6 +585,7 @@ function MultipleChoiceExercise({ data, onComplete, idioma }) {
   const [selected, setSelected] = useState(null)
   const [showResult, setShowResult] = useState(false)
   const [results, setResults] = useState([])
+  const answersRef = useRef([])
 
   function selectOption(idx) {
     if (showResult) return
@@ -308,6 +593,7 @@ function MultipleChoiceExercise({ data, onComplete, idioma }) {
     setShowResult(true)
     const correct = idx === preguntas[current].respuesta_correcta
     setResults((r) => [...r, correct])
+    answersRef.current.push({ selected: idx, correct })
   }
 
   function next() {
@@ -317,7 +603,7 @@ function MultipleChoiceExercise({ data, onComplete, idioma }) {
       setCurrent(current + 1)
     } else {
       const score = Math.round((results.filter(Boolean).length / results.length) * 100)
-      onComplete(score)
+      onComplete(score, { type: 'multiple_choice', answers: answersRef.current })
     }
   }
 
@@ -385,19 +671,21 @@ function CategorizationExercise({ data, onComplete }) {
   const [placed, setPlaced] = useState({})  // word index → category index
   const [currentWord, setCurrentWord] = useState(0)
   const [results, setResults] = useState([])
+  const answersRef = useRef([])
 
   function placeInCategory(catIdx) {
     const word = palabras[currentWord]
     const correct = word.categoria === catIdx
     setPlaced((p) => ({ ...p, [currentWord]: catIdx }))
     setResults((r) => [...r, correct])
+    answersRef.current.push({ palabra: word.palabra, selectedCategory: catIdx, correctCategory: word.categoria, correct })
 
     if (currentWord + 1 < palabras.length) {
       setCurrentWord(currentWord + 1)
     } else {
       const allResults = [...results, correct]
       const score = Math.round((allResults.filter(Boolean).length / allResults.length) * 100)
-      onComplete(score)
+      onComplete(score, { type: 'categorization', answers: answersRef.current })
     }
   }
 
@@ -443,12 +731,14 @@ function FillBlankExercise({ data, onComplete, idioma }) {
   const [showResult, setShowResult] = useState(false)
   const [isCorrect, setIsCorrect] = useState(false)
   const [results, setResults] = useState([])
+  const answersRef = useRef([])
 
   function check() {
     const correct = normalize(answer) === normalize(ejercicios[current].respuesta)
     setIsCorrect(correct)
     setShowResult(true)
     setResults((r) => [...r, correct])
+    answersRef.current.push({ userAnswer: answer, correct })
   }
 
   function next() {
@@ -459,7 +749,7 @@ function FillBlankExercise({ data, onComplete, idioma }) {
       setCurrent(current + 1)
     } else {
       const score = Math.round((results.filter(Boolean).length / results.length) * 100)
-      onComplete(score)
+      onComplete(score, { type: 'fill_blank', answers: answersRef.current })
     }
   }
 
@@ -524,6 +814,7 @@ function TranslationExercise({ data, onComplete }) {
   const [showResult, setShowResult] = useState(false)
   const [isCorrect, setIsCorrect] = useState(false)
   const [results, setResults] = useState([])
+  const answersRef = useRef([])
 
   function check() {
     const ex = ejercicios[current]
@@ -532,6 +823,7 @@ function TranslationExercise({ data, onComplete }) {
     setIsCorrect(correct)
     setShowResult(true)
     setResults((r) => [...r, correct])
+    answersRef.current.push({ userAnswer: answer, correct })
   }
 
   function next() {
@@ -542,7 +834,7 @@ function TranslationExercise({ data, onComplete }) {
       setCurrent(current + 1)
     } else {
       const score = Math.round((results.filter(Boolean).length / results.length) * 100)
-      onComplete(score)
+      onComplete(score, { type: 'translation', answers: answersRef.current })
     }
   }
 
@@ -597,12 +889,14 @@ function DictationExercise({ data, idioma, onComplete }) {
   const [showResult, setShowResult] = useState(false)
   const [isCorrect, setIsCorrect] = useState(false)
   const [results, setResults] = useState([])
+  const answersRef = useRef([])
 
   function check() {
     const correct = normalize(answer) === normalize(ejercicios[current].texto)
     setIsCorrect(correct)
     setShowResult(true)
     setResults((r) => [...r, correct])
+    answersRef.current.push({ userAnswer: answer, correct })
   }
 
   function next() {
@@ -613,7 +907,7 @@ function DictationExercise({ data, idioma, onComplete }) {
       setCurrent(current + 1)
     } else {
       const score = Math.round((results.filter(Boolean).length / results.length) * 100)
-      onComplete(score)
+      onComplete(score, { type: 'dictation', answers: answersRef.current })
     }
   }
 
@@ -673,18 +967,20 @@ function FlashcardsExercise({ data, onComplete }) {
   const [current, setCurrent] = useState(0)
   const [flipped, setFlipped] = useState(false)
   const [results, setResults] = useState([])
+  const answersRef = useRef([])
 
   function rate(difficulty) {
     // Easy=100, Medium=60, Hard=20
     const score = difficulty === 'easy' ? 100 : difficulty === 'medium' ? 60 : 20
     setResults((r) => [...r, score])
+    answersRef.current.push({ rating: difficulty, score })
     setFlipped(false)
     if (current + 1 < tarjetas.length) {
       setCurrent(current + 1)
     } else {
       const allResults = [...results, score]
       const avg = Math.round(allResults.reduce((a, b) => a + b, 0) / allResults.length)
-      onComplete(avg)
+      onComplete(avg, { type: 'flashcards', answers: answersRef.current })
     }
   }
 
@@ -748,6 +1044,7 @@ export default function LessonExercise() {
   const [score, setScore] = useState(0)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(false)
+  const [reviewMode, setReviewMode] = useState(false)
 
   // Fetch lesson if not passed via navigation state
   useEffect(() => {
@@ -769,13 +1066,23 @@ export default function LessonExercise() {
     }
   }, [lesson])
 
-  const saveLesson = useCallback(async (lessonId, finalScore) => {
+  // Parse the saved user answers for review mode
+  const savedUserAnswers = useMemo(() => {
+    if (!lesson?.resultado_json) return null
+    try {
+      return JSON.parse(lesson.resultado_json)
+    } catch {
+      return null
+    }
+  }, [lesson])
+
+  const saveLesson = useCallback(async (lessonId, finalScore, answersData) => {
     setSaving(true)
     setSaveError(false)
     try {
       await api.post(`/api/leccion/${lessonId}/completar`, {
         puntuacion: finalScore,
-        resultado_json: JSON.stringify({ score: finalScore }),
+        resultado_json: JSON.stringify(answersData || { score: finalScore }),
       })
     } catch (err) {
       // Only ignore 400 "already completed"; surface all other errors
@@ -786,10 +1093,10 @@ export default function LessonExercise() {
     }
   }, [])
 
-  const handleComplete = useCallback(async (finalScore) => {
+  const handleComplete = useCallback(async (finalScore, answersData) => {
     setScore(finalScore)
     setCompleted(true)
-    await saveLesson(lesson.id, finalScore)
+    await saveLesson(lesson.id, finalScore, answersData)
   }, [lesson, saveLesson])
 
   function sendToChatTutor() {
@@ -840,7 +1147,7 @@ export default function LessonExercise() {
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-8">
-        {/* ── Completed screen ── */}
+        {/* ── Completed screen (just finished) ── */}
         {completed ? (
           <div className="card text-center py-12 space-y-4">
             <span className="text-6xl">{score >= 80 ? '🎉' : score >= 50 ? '👍' : '💪'}</span>
@@ -867,14 +1174,54 @@ export default function LessonExercise() {
               </button>
             </div>
           </div>
-        ) : lesson.completada ? (
-          /* Already completed lesson — show read-only info */
+        ) : lesson.completada && !reviewMode ? (
+          /* Already completed lesson — show summary with option to review */
           <div className="card text-center py-12 space-y-4">
             <span className="text-6xl">✅</span>
             <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100">Lección ya completada</h2>
             <p className="text-4xl font-bold text-primary-600 dark:text-primary-400">{lesson.puntuacion}%</p>
-            <button onClick={() => navigate('/dashboard')} className="btn-primary">← Volver al Dashboard</button>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center pt-4">
+              <button onClick={() => navigate('/dashboard')} className="btn-primary">← Volver al Dashboard</button>
+              <button onClick={() => setReviewMode(true)} className="px-5 py-2.5 rounded-xl border border-primary-500 text-primary-600 dark:text-primary-400 font-semibold hover:bg-primary-50 dark:hover:bg-primary-900/30 transition-colors">
+                🔍 Ver mis respuestas
+              </button>
+            </div>
           </div>
+        ) : lesson.completada && reviewMode ? (
+          /* ── Review mode: read-only display of saved answers ── */
+          <>
+            <div className="mb-4 rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 px-4 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">📋</span>
+                <span className="text-sm font-medium text-green-700 dark:text-green-400">
+                  Revisión de respuestas — Puntuación: {lesson.puntuacion}%
+                </span>
+              </div>
+              <button onClick={() => setReviewMode(false)} className="text-sm text-green-600 dark:text-green-400 font-semibold hover:underline">
+                ← Volver
+              </button>
+            </div>
+            <div className="card">
+              {savedUserAnswers ? (
+                <ReviewRenderer
+                  tipo={lesson.tipo_ejercicio}
+                  data={exerciseData}
+                  userAnswers={savedUserAnswers}
+                  idioma={lesson.idioma}
+                />
+              ) : (
+                <div className="text-center py-8 space-y-3">
+                  <span className="text-4xl">📝</span>
+                  <p className="text-gray-500 dark:text-gray-400">
+                    No se encontraron respuestas guardadas para esta lección.
+                  </p>
+                  <p className="text-sm text-gray-400">
+                    Las lecciones completadas antes de esta actualización no tienen respuestas detalladas.
+                  </p>
+                </div>
+              )}
+            </div>
+          </>
         ) : (
           /* ── Active exercise ── */
           <div className="card">
