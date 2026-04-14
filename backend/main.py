@@ -60,7 +60,7 @@ from schemas import (
     UpdateProfileRequest,
 )
 
-load_dotenv()
+load_dotenv(override=True)
 
 # ---------------------------------------------------------------------------
 # Create DB tables on startup
