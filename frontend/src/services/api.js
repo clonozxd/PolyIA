@@ -13,4 +13,15 @@ const api = axios.create({
   },
 })
 
+// Attach JWT token from localStorage on every request.
+// This is more reliable than setting api.defaults.headers inside a useEffect,
+// which can miss requests due to React lifecycle timing on page reloads.
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('polyia_token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
 export default api
