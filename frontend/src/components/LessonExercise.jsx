@@ -747,6 +747,7 @@ export default function LessonExercise() {
   const [completed, setCompleted] = useState(false)
   const [score, setScore] = useState(0)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState(false)
 
   // Fetch lesson if not passed via navigation state
   useEffect(() => {
@@ -768,21 +769,28 @@ export default function LessonExercise() {
     }
   }, [lesson])
 
-  const handleComplete = useCallback(async (finalScore) => {
-    setScore(finalScore)
-    setCompleted(true)
+  const saveLesson = useCallback(async (lessonId, finalScore) => {
     setSaving(true)
+    setSaveError(false)
     try {
-      await api.post(`/api/leccion/${lesson.id}/completar`, {
+      await api.post(`/api/leccion/${lessonId}/completar`, {
         puntuacion: finalScore,
         resultado_json: JSON.stringify({ score: finalScore }),
       })
-    } catch {
-      // Lesson may already be completed
+    } catch (err) {
+      // Only ignore 400 "already completed"; surface all other errors
+      if (err?.response?.status === 400) return
+      setSaveError(true)
     } finally {
       setSaving(false)
     }
-  }, [lesson])
+  }, [])
+
+  const handleComplete = useCallback(async (finalScore) => {
+    setScore(finalScore)
+    setCompleted(true)
+    await saveLesson(lesson.id, finalScore)
+  }, [lesson, saveLesson])
 
   function sendToChatTutor() {
     navigate('/chat', {
@@ -841,6 +849,14 @@ export default function LessonExercise() {
             </h2>
             <p className="text-4xl font-bold text-primary-600 dark:text-primary-400">{score}%</p>
             {saving && <p className="text-sm text-gray-400">Guardando progreso…</p>}
+            {saveError && (
+              <div className="flex flex-col items-center gap-2">
+                <p className="text-sm text-red-500 dark:text-red-400">⚠️ No se pudo guardar el progreso.</p>
+                <button onClick={() => saveLesson(lesson.id, score)} className="text-sm text-primary-600 dark:text-primary-400 font-semibold hover:underline">
+                  Reintentar
+                </button>
+              </div>
+            )}
 
             <div className="flex flex-col sm:flex-row gap-3 justify-center pt-4">
               <button onClick={() => navigate('/dashboard')} className="btn-primary">
