@@ -47,7 +47,7 @@ export default function LoginForm() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-purple-100 dark:from-surface-dark dark:to-gray-900 flex items-center justify-center p-4 transition-colors duration-300">
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-blue-100 dark:from-surface-dark dark:to-gray-900 flex items-center justify-center p-4 transition-colors duration-300">
       {/* Dark mode toggle */}
       <button
         onClick={toggle}

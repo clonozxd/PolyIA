@@ -331,29 +331,29 @@ export default function Dashboard() {
           {/* ── Quick actions ── */}
           <section className="space-y-4">
             {/* Chat CTA */}
-            <div className="card bg-gradient-to-br from-primary-600 to-primary-700 text-white">
+            <div className="card bg-gradient-to-br from-primary-600 to-blue-700 text-white">
               <h3 className="text-lg font-semibold mb-2">Chat con tu Tutor 🤖</h3>
-              <p className="text-primary-100 text-sm mb-4">
+              <p className="text-blue-100 text-sm mb-4">
                 Practica conversación y recibe correcciones gramaticales en tiempo real.
                 También puedes enviar resultados de lecciones para que el tutor te explique tus errores.
               </p>
               <button
                 onClick={() => navigate('/chat')}
-                className="bg-white text-primary-700 hover:bg-primary-50 font-semibold py-2 px-5 rounded-xl transition-colors"
+                className="bg-white text-primary-700 hover:bg-blue-50 font-semibold py-2 px-5 rounded-xl transition-colors"
               >
                 Abrir Chat →
               </button>
             </div>
 
             {/* Stats CTA */}
-            <div className="card bg-gradient-to-br from-indigo-600 to-purple-700 text-white">
+            <div className="card bg-gradient-to-br from-accent-600 to-accent-700 text-white">
               <h3 className="text-lg font-semibold mb-2">Mis Estadísticas 📊</h3>
-              <p className="text-indigo-100 text-sm mb-4">
+              <p className="text-accent-100 text-sm mb-4">
                 Revisa tu actividad semanal, puntajes promedio y progreso por idioma.
               </p>
               <button
                 onClick={() => navigate('/estadisticas')}
-                className="bg-white text-indigo-700 hover:bg-indigo-50 font-semibold py-2 px-5 rounded-xl transition-colors"
+                className="bg-white text-accent-700 hover:bg-accent-50 font-semibold py-2 px-5 rounded-xl transition-colors"
               >
                 Ver Estadísticas →
               </button>
