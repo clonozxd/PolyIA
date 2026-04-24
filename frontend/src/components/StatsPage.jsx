@@ -61,6 +61,32 @@ export default function StatsPage() {
   const { weekly_activity, summary } = stats
   const maxCount = Math.max(...weekly_activity.map(d => d.count), 1)
 
+  const exportToCSV = () => {
+    if (!summary) return;
+    const headers = ['Métrica', 'Valor'];
+    const rows = [
+      ['Lecciones Totales', summary.total_lessons],
+      ['Lecciones Completadas', summary.total_completed],
+      ['Lecciones Pendientes', summary.pending],
+      ['Puntaje Promedio', `${summary.avg_score}%`],
+      ['Mejor Puntaje', `${summary.best_score}%`],
+      ['Tema Favorito', summary.favorite_topic || 'N/A'],
+      ['Ejercicio Favorito', summary.favorite_type || 'N/A']
+    ];
+
+    const csvContent = "data:text/csv;charset=utf-8," 
+      + headers.join(",") + "\n" 
+      + rows.map(e => e.join(",")).join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `Reporte_PolyIA_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="min-h-screen bg-surface-light dark:bg-surface-dark transition-colors duration-300">
       {/* Header */}
@@ -95,7 +121,18 @@ export default function StatsPage() {
 
         {/* ── Summary Cards ── */}
         <section>
-          <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">Resumen General</h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100">Resumen General</h2>
+            {summary.total_lessons > 0 && (
+              <button 
+                onClick={exportToCSV}
+                className="flex items-center gap-2 bg-primary-600 hover:bg-primary-700 text-white text-sm px-4 py-1.5 rounded-lg transition-colors font-medium shadow-sm active:scale-95"
+                title="Descargar reporte corporativo de rendimiento"
+              >
+                <span>📥</span> Exportar CSV
+              </button>
+            )}
+          </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
             <SummaryCard emoji="📚" label="Lecciones totales" value={summary.total_lessons} />
             <SummaryCard emoji="✅" label="Completadas" value={summary.total_completed} color="green" />
