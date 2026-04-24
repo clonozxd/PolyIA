@@ -173,11 +173,21 @@ export default function Dashboard() {
 
       <main className="max-w-6xl mx-auto px-4 py-8 space-y-8">
         {/* ── Welcome ── */}
-        <section>
-          <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100">
-            ¡Bienvenido de vuelta, {displayName}! 👋
-          </h2>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">Selecciona un idioma y genera tu próxima lección interactiva.</p>
+        <section className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100">
+              ¡Bienvenido de vuelta, {displayName}! 👋
+            </h2>
+            <p className="text-gray-500 dark:text-gray-400 mt-1">Selecciona un idioma y genera tu próxima lección interactiva.</p>
+          </div>
+          
+          <div className="flex items-center gap-3 bg-gradient-to-r from-orange-50 to-amber-50 dark:from-orange-900/20 dark:to-amber-900/20 border border-orange-200 dark:border-orange-800/50 px-5 py-2.5 rounded-2xl shadow-sm transition-transform hover:scale-105">
+            <span className="text-3xl animate-bounce" style={{ animationDuration: '2s' }}>🔥</span>
+            <div>
+              <p className="text-[10px] text-orange-600 dark:text-orange-400 font-extrabold uppercase tracking-widest">Racha Actual</p>
+              <p className="text-xl font-black text-gray-900 dark:text-white leading-tight">3 Días</p>
+            </div>
+          </div>
         </section>
 
         {/* ── Language selector ── */}
